@@ -189,17 +189,17 @@ export class Chunk {
           const tint = field.tint(x, z) * 0.5 + 0.5;
           // Hue pulled a hair WARMER than the canopy (which is now cooler/deeper) so
           // the meadow and the tree masses separate cleanly in both hue and value.
-          let h = 0.33 - lit * 0.04 + (tint - 0.5) * 0.04; // fresh true green
+          let h = 0.27 - lit * 0.03 + (tint - 0.5) * 0.05; // warm olive — earthy, not candy-green
           // LUSH painted meadow (matched to the reference): a saturated verdant
           // carpet with a WIDE value range — bright sunlit lime crowns against deep
           // blue-green shadow pockets — which is what gives the turf its depth and
           // stops it reading as flat pale fuzz over bare ground.
-          let s = 0.62 + (1 - lit) * 0.08 + tint * 0.04; // LUSH clean green — not muddy, not acid
-          let l = 0.36 + lit * 0.26 + (rnd() - 0.5) * 0.07; // bright fresh meadow, floor well off black
-          if (field.dry(x, z) > 0.62) { h = 0.28; s = 0.55; l = 0.54 + lit * 0.08; } // fresh dry green
+          let s = 0.46 + (1 - lit) * 0.08 + tint * 0.04; // EARTHY moderate sat — olive, not candy, not mud
+          let l = 0.28 + lit * 0.22 + (rnd() - 0.5) * 0.07; // DARKER ground than the (lighter) canopies
+          if (field.dry(x, z) > 0.62) { h = 0.12; s = 0.45; l = 0.44 + lit * 0.06; } // golden-brown dry earth patch
           // A mild clump-to-clump dip for life — never the near-black it used to crush to.
-          if (rnd() < 0.14) { l -= 0.07; }
-          cc.setHSL(h, THREE.MathUtils.clamp(s, 0, 1), THREE.MathUtils.clamp(l, 0.30, 0.95)); // floor 0.30 → no dark grass
+          if (rnd() < 0.14) { l -= 0.06; }
+          cc.setHSL(h, THREE.MathUtils.clamp(s, 0, 1), THREE.MathUtils.clamp(l, 0.22, 0.9)); // off black, but a deep ground tone
           // Bigger, blade-ish dabs so the carpet reads densely planted (less bare
           // ground showing through), a minority taller and upright.
           scale = 1.0 + rnd() * 1.1;
