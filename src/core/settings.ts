@@ -20,7 +20,7 @@ import { FOG_NEAR, FOG_FAR, WIND_STRENGTH } from '../config';
 export const uGlow = uniform(0.7); // halation glow strength — was const GLOW
 export const uImpasto = uniform(0.5); // canvas relief / texture — was const IMPASTO
 export const uChroma = uniform(1.14); // Monet grade saturation push
-export const uVignette = uniform(0.28); // corner darkening amount
+export const uVignette = uniform(1.0); // corner darkening amount
 export const uBleed = uniform(0.35); // oil-paint smear: blend colour along contours (post.ts)
 
 // Splat / stroke shaping (SplatMaterial.ts).
