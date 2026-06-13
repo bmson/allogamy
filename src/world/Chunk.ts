@@ -162,11 +162,22 @@ export class Chunk {
       // override one read with the other — bare grit creeps into the turf and grass
       // tufts push onto the track — so the edge reads ragged and broken-up.
       const margin = path > 0.08 && path < 0.34; // the frayed transition band
-      const bareInGrass = grassy && margin && rnd() < 0.35;
-      const grassOnPath = !grassy && path < 0.6 && rock < 0.4 && rnd() < 0.28;
+      const bareInGrass = grassy && margin && rnd() < 0.3;
+      // Grass crowds the track hard (the reference's path is a thin accent the
+      // meadow presses right up to) — so most of a faint path still reads green.
+      const grassOnPath = !grassy && path < 0.7 && rock < 0.4 && rnd() < 0.5;
 
       if (grassy && !bareInGrass) {
-        if (rnd() < 0.04) {
+        if (rnd() < 0.03) {
+          // a pale weathered stone / pebble nestled in the turf — stone variety
+          // scattered across the meadow (cf. the reference), not just on rock faces.
+          cc.copy(palette.rock).lerp(palette.rockShadow, rnd() * 0.6);
+          const stoneShade = THREE.MathUtils.clamp(0.7 + 0.4 * ndotl, 0.55, 1.1);
+          cc.multiplyScalar(stoneShade);
+          scale = 0.6 + rnd() * rnd() * 1.6; // mostly small grit, the rare bigger stone
+          yoff = 0.2 + rnd() * 0.35; // sits low, on the ground
+          wind = 0; angle = rnd() * Math.PI; aspect = 0.9 + rnd() * 0.3;
+        } else if (rnd() < 0.04) {
           // wildflower fleck floating just above the grass — colour punctuation
           const f = rnd();
           if (f < 0.55) cc.copy(palette.flowerWhite);
@@ -178,26 +189,36 @@ export class Chunk {
           // hot-lime dry patches, occasional deep-shadow pockets. Light is baked
           // into lightness here (do NOT also multiply by shade).
           const tint = field.tint(x, z) * 0.5 + 0.5;
-          let h = 0.32 - lit * 0.11 + (tint - 0.5) * 0.05;
-          // Saturation pulled back — the meadow was reading too vibrant/electric; a
-          // softer, more naturalistic, slightly dusty green sits better in the haze.
-          let s = 0.44 + (1 - lit) * 0.1 + tint * 0.04;
-          let l = 0.17 + lit * 0.4 + (rnd() - 0.5) * 0.08;
-          if (field.dry(x, z) > 0.62) { h = 0.2; s = 0.56; l = 0.48 + lit * 0.12; } // calmer lime
-          if (rnd() < 0.1) l *= 0.6; // deep-shadow pockets
-          cc.setHSL(h, s, THREE.MathUtils.clamp(l, 0.05, 0.95));
+          let h = 0.31 - lit * 0.1 + (tint - 0.5) * 0.05;
+          // LUSH painted meadow (matched to the reference): a saturated verdant
+          // carpet with a WIDE value range — bright sunlit lime crowns against deep
+          // blue-green shadow pockets — which is what gives the turf its depth and
+          // stops it reading as flat pale fuzz over bare ground.
+          let s = 0.6 + (1 - lit) * 0.12 + tint * 0.05;
+          let l = 0.16 + lit * 0.46 + (rnd() - 0.5) * 0.09;
+          if (field.dry(x, z) > 0.62) { h = 0.2; s = 0.7; l = 0.52 + lit * 0.12; } // bright lime patch
+          // Deep shade pockets — more of them, and deeper — for the dark/light
+          // interplay between clumps that reads as a dense, layered meadow.
+          if (rnd() < 0.22) { l *= 0.5; s += 0.08; }
+          cc.setHSL(h, THREE.MathUtils.clamp(s, 0, 1), THREE.MathUtils.clamp(l, 0.04, 0.95));
+          // Bigger, blade-ish dabs so the carpet reads densely planted (less bare
+          // ground showing through), a minority taller and upright.
+          scale = 1.0 + rnd() * 1.1;
+          aspect = rnd() < 0.4 ? 1.3 + rnd() * 0.9 : 0.9 + rnd() * 0.3;
+          yoff = 0.5 + rnd() * 1.1;
           wind = 0.4 + rnd() * 0.15;
         }
       } else if (grassOnPath) {
         // a ragged grass tuft pushing out onto the worn track — frayed encroachment.
         // A slightly drier, dustier turf so it reads as scrappy verge growth, and a
         // taller upright blade-ish dab that catches the wind.
-        const h = 0.27 - lit * 0.09;
-        const s = 0.4 + (1 - lit) * 0.08;
-        const l = THREE.MathUtils.clamp(0.18 + lit * 0.38 + (rnd() - 0.5) * 0.08, 0.05, 0.95);
-        cc.setHSL(h, s, l);
-        scale = 0.6 + rnd() * 0.6;
-        yoff = 0.3 + rnd() * 0.6;
+        const h = 0.29 - lit * 0.1;
+        const s = 0.56 + (1 - lit) * 0.1;
+        let l = THREE.MathUtils.clamp(0.17 + lit * 0.42 + (rnd() - 0.5) * 0.09, 0.05, 0.95);
+        if (rnd() < 0.2) l *= 0.55; // shade pockets, like the turf
+        cc.setHSL(h, THREE.MathUtils.clamp(s, 0, 1), l);
+        scale = 0.8 + rnd() * 0.9;
+        yoff = 0.4 + rnd() * 0.9;
         wind = 0.45 + rnd() * 0.2;
         aspect = 1.3 + rnd() * 0.8; // upright blade
       } else {

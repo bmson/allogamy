@@ -118,9 +118,14 @@ export class TerrainField {
     const slope = 1 - n.y;
     const nx = n.x, nz = n.z; // capture before _n is reused
     const path = this.pathMask(x, z);
-    // Rock shows on steep ground and in sparse patches.
-    const patch = THREE.MathUtils.smoothstep(this.rN.fbm(x * 0.011, z * 0.011, 3), 0.34, 0.6);
-    const rock = THREE.MathUtils.clamp(Math.max(slope * 1.5 - 0.35, 0) + patch * 0.5, 0, 1);
+    // Rock shows on steep ground AND in more frequent, varied patches now: broad
+    // weathered scree fields at a coarse scale, plus finer scattered outcrops, so
+    // the meadow is studded with far more stone variety. Two octave-scales keep it
+    // from reading as one uniform speckle.
+    const scree = THREE.MathUtils.smoothstep(this.rN.fbm(x * 0.0055, z * 0.0055, 3), 0.22, 0.55);
+    const outcrop = THREE.MathUtils.smoothstep(this.rN.fbm(x * 0.018 + 40, z * 0.018 - 23, 3), 0.3, 0.58);
+    const patch = Math.max(scree * 0.7, outcrop * 0.6);
+    const rock = THREE.MathUtils.clamp(Math.max(slope * 1.7 - 0.25, 0) + patch, 0, 1);
     return { slope, path, rock, nx, nz };
   }
 
@@ -154,9 +159,12 @@ export class TerrainField {
       // mottle the bare earth so it isn't a flat slab (scuffed light/dark patches)
       const mottle = (this.dN.noise(x * 0.09, z * 0.09) * 0.5 + 0.5 - 0.5) * 0.22;
       _earth.offsetHSL(0, 0, mottle);
-      out.lerp(_earth, THREE.MathUtils.smoothstep(path, 0.1, 0.7));
+      // Only the STRONG path core paints as bare earth — faint/worn stretches keep
+      // their green so the meadow dominates and the track reads as a thin accent
+      // ribbon (cf. the reference), not a broad beige band bleeding through the turf.
+      out.lerp(_earth, THREE.MathUtils.smoothstep(path, 0.38, 0.85));
       // pale grit along the worn outer band (path is mid, not full), broken by noise
-      const rim = (1 - Math.abs(path - 0.42) * 3.0);
+      const rim = (1 - Math.abs(path - 0.55) * 3.0);
       const grit = this.rN.noise(x * 0.12, z * 0.12) * 0.5 + 0.5;
       if (rim > 0 && grit > 0.55) out.lerp(palette.pathPebble, rim * (grit - 0.55) * 0.8);
     }

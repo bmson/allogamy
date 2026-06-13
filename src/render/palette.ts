@@ -20,11 +20,11 @@ export const palette = {
 
   // ground greens — temperature split: warm sunlit yellow-green → cool deep
   // blue-green shade, with a wide value range so the meadow isn't monochrome.
-  grassLow: new THREE.Color('#357641'), // softened from an electric green toward a
-  grassHigh: new THREE.Color('#74b061'), // calmer, dustier, more naturalistic meadow
+  grassLow: new THREE.Color('#2f8a44'), // lively meadow green — vibrant again, but shy
+  grassHigh: new THREE.Color('#6cc456'), // of the original electric/acid extreme
   grassDark: new THREE.Color('#102815'),
   grassDeep: new THREE.Color('#0d2b1a'),
-  grassLime: new THREE.Color('#c2cf52'), // muted lime patches (was a hot acid yellow)
+  grassLime: new THREE.Color('#cfdd35'), // bright lime patches (just off acid-yellow)
 
   // earth & rock — dirt warmed toward terracotta
   pathEarth: new THREE.Color('#a85e26'),
