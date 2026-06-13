@@ -165,18 +165,21 @@ export class Chunk {
       const watery = !grassy && rock < 0.4;
 
       if (grassy && !wetEdge) {
-        if (rnd() < 0.03) {
+        if (rnd() < 0.022) {
           // a pale weathered stone / pebble nestled in the turf — stone variety
           // scattered across the meadow (cf. the reference), not just on rock faces.
+          // Kept sparse so the turf reads clean.
           cc.copy(palette.rock).lerp(palette.rockShadow, rnd() * 0.6);
           const stoneShade = THREE.MathUtils.clamp(0.7 + 0.4 * ndotl, 0.55, 1.1);
           cc.multiplyScalar(stoneShade);
           scale = 0.6 + rnd() * rnd() * 1.6; // mostly small grit, the rare bigger stone
           yoff = 0.2 + rnd() * 0.35; // sits low, on the ground
           wind = 0; angle = rnd() * Math.PI; aspect = 0.9 + rnd() * 0.3;
-        } else if (rnd() < 0.022) {
+        } else if (rnd() < 0.012) {
           // wildflower fleck floating just above the grass — colour punctuation,
           // kept SPARSE and mostly white/violet so the meadow doesn't read acid-yellow.
+          // DENSITY: rate lowered further (was 0.022) — flowers.ts carries the blooms;
+          // these flecks are only a faint extra sprinkle, not a confetti layer.
           const f = rnd();
           if (f < 0.6) cc.copy(palette.flowerWhite);
           else if (f < 0.78) cc.copy(palette.flowerYellow);

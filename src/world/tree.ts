@@ -302,10 +302,12 @@ function growBranch(
   const b = p;
 
   if (depth >= ch.maxDepth || rad < 0.085) {
-    // a tip leaf-cluster; weeping/old trees let it droop, warmth carries through
+    // a tip leaf-cluster; weeping/old trees let it droop, warmth carries through.
+    // DENSITY: fewer dabs per tip cluster (was 16..31) — the canopy mass is carried
+    // by the central blobs below, so the tips only need a light fringe.
     emitBlob(
       fp, fs, fc, fw, fa, fasp, b.x, b.y, b.z, 1.7 + rad * 3.2,
-      16 + Math.floor(rnd() * 16), 2.0, 0.85, 'deciduous', rnd,
+      9 + Math.floor(rnd() * 9), 2.0, 0.85, 'deciduous', rnd,
       { warmth: ch.warmth, droop: ch.droop, squash: 0.82, litBias: -0.04 },
     );
     return;
@@ -400,14 +402,18 @@ function buildDeciduous(rnd: () => number): TreeProto {
   const canopyR = trunkH * (kind === 'tall' ? 0.34 + rnd() * 0.12 : kind === 'spread' ? 0.6 + rnd() * 0.22 : 0.48 + rnd() * 0.18);
   const cTop = top.clone();
   const cBase = canopyR * (kind === 'spread' ? 0.32 : kind === 'weeping' ? 0.5 : 0.42);
-  const lobes = 3 + Math.floor(rnd() * 3);
-  // shaded inner mass first (deep core)
+  // DENSITY: fewer lobes (was 3..5) → simpler, lighter crowns that still read as
+  // a lumpy mass rather than a ball.
+  const lobes = 2 + Math.floor(rnd() * 2);
+  // shaded inner mass first (deep core) — roughly halved dab count (was 140..219).
+  // The shell-biased distribution means the silhouette barely changes; the saving
+  // is in the hidden interior dabs that mostly overdraw each other.
   emitBlob(
     fp, fs, fc, fw, fa, fasp, cTop.x, cTop.y + cBase, cTop.z, canopyR * 0.78,
-    140 + Math.floor(rnd() * 80), 2.6, 0.85, 'deciduous', rnd,
+    74 + Math.floor(rnd() * 42), 2.6, 0.85, 'deciduous', rnd,
     { warmth: ch.warmth, droop: ch.droop * 0.5, squash: kind === 'spread' ? 0.7 : 0.9, litBias: -0.16, scaleVar: 0.6 },
   );
-  // surrounding lit lobes, offset around and above
+  // surrounding lit lobes, offset around and above (was 70..139 dabs each)
   for (let i = 0; i < lobes; i++) {
     const ang = (i / lobes) * Math.PI * 2 + rnd() * 1.2;
     const off = canopyR * (0.35 + rnd() * 0.4);
@@ -417,7 +423,7 @@ function buildDeciduous(rnd: () => number): TreeProto {
     const ly = cTop.y + cBase + canopyR * (0.15 + rnd() * 0.5);
     emitBlob(
       fp, fs, fc, fw, fa, fasp, lx, ly, lz, lr,
-      70 + Math.floor(rnd() * 70), 2.5, 0.95, 'deciduous', rnd,
+      38 + Math.floor(rnd() * 38), 2.5, 0.95, 'deciduous', rnd,
       { warmth: ch.warmth, droop: ch.droop, squash: kind === 'spread' ? 0.72 : 0.86, litBias: 0.04, scaleVar: 0.75 },
     );
   }
@@ -462,7 +468,9 @@ function buildConifer(rnd: () => number): TreeProto {
   // tier heights/radii jittered and a couple of lopsided gaps so the cone isn't
   // a stamped Christmas-tree. Skirt tiers droop & overhang.
   const baseR = H * (0.24 + rnd() * 0.12) / slender;
-  const tiers = 6 + Math.floor(rnd() * 4);
+  // DENSITY: fewer tiers (was 6..9) and fewer dabs per tier (was 14 + (1-ff)*40) →
+  // a lighter cone that still reads as a tiered spruce silhouette.
+  const tiers = 5 + Math.floor(rnd() * 3);
   for (let t = 0; t < tiers; t++) {
     const f = (t + (rnd() - 0.5) * 0.5) / (tiers - 1); // 0 base .. 1 top, jittered
     const ff = clamp(f, 0, 1);
@@ -472,7 +480,7 @@ function buildConifer(rnd: () => number): TreeProto {
     // lopsided fullness: each tier favours one side a little
     const lop = rnd() * Math.PI * 2;
     const lopAmt = 0.2 + rnd() * 0.35;
-    const dabs = Math.round(14 + (1 - ff) * 40);
+    const dabs = Math.round(9 + (1 - ff) * 22);
     for (let i = 0; i < dabs; i++) {
       const ang = rnd() * Math.PI * 2;
       const sideBias = 1 + Math.cos(ang - lop) * lopAmt;
@@ -541,12 +549,13 @@ function buildBush(rnd: () => number, scrub: boolean): TreeProto {
     const mr = scrub ? R * (0.45 + rnd() * 0.45) : R * (0.8 + rnd() * 0.3);
     emitBlob(
       fp, fs, fc, fw, fa, fasp, mx, cy + (rnd() - 0.5) * R * 0.3, mz, mr,
-      40 + Math.floor(rnd() * 45), 1.4, 0.42, 'bush', rnd,
+      22 + Math.floor(rnd() * 24), 1.4, 0.42, 'bush', rnd,
       { warmth, squash: scrub ? 0.6 : 0.8, droop: scrub ? 0.18 : rnd() * 0.1, litBias: -0.04, scaleVar: 0.8 },
     );
   }
-  // blossoms + berries scattered over the crown (scrub gets far fewer)
-  const decor = scrub ? 3 + Math.floor(rnd() * 6) : 14 + Math.floor(rnd() * 18);
+  // blossoms + berries scattered over the crown (scrub gets far fewer). DENSITY:
+  // fewer bright accents so bushes read as calm masses, not confetti-dotted.
+  const decor = scrub ? 2 + Math.floor(rnd() * 4) : 7 + Math.floor(rnd() * 9);
   for (let i = 0; i < decor; i++) {
     const u = rnd() * 2 - 1;
     const phi = rnd() * Math.PI * 2;
@@ -649,7 +658,9 @@ export function scatterTrees(
   };
 
   // ---- trees: trunk geometry + foliage + contact shadow ----
-  const cells = 13; // finer scatter grid → more, better-spaced trees
+  // DENSITY: coarser scatter grid (was 13) and a lower placement chance so groves
+  // read as distinct masses with breathing room rather than a solid wall of trees.
+  const cells = 11;
   const cellSize = S / cells;
   for (let gz = 0; gz < cells; gz++) {
     for (let gx = 0; gx < cells; gx++) {
@@ -659,7 +670,7 @@ export function scatterTrees(
       if (surf.path > 0.2 || surf.rock > 0.4 || surf.slope > 0.46) continue;
       const dens = field.forest(x, z);
       // clumped into woodland (dense), clearings stay open
-      if (rnd() > 0.42 * (0.35 + dens)) continue;
+      if (rnd() > 0.32 * (0.35 + dens)) continue;
 
       const proto = treeProtos[Math.floor(rnd() * treeProtos.length)];
       // Long-tailed size: most trees mid-sized, many smaller, but the odd
@@ -689,8 +700,8 @@ export function scatterTrees(
       }
       stampFoliage(proto, x, y, z, scale, cy, sy, tint);
 
-      // soft cast-shadow pool, offset & elongated away from the sun
-      const shN = 18 + Math.floor(rnd() * 14);
+      // soft cast-shadow pool, offset & elongated away from the sun (fewer dabs)
+      const shN = 10 + Math.floor(rnd() * 8);
       const shR = proto.canopyR * scale * 0.85;
       const scx = x + sdx * shR * 0.7;
       const scz = z + sdz * shR * 0.7;
@@ -708,8 +719,10 @@ export function scatterTrees(
     }
   }
 
-  // ---- bushes + scrub: foliage-only ground cover, dense everywhere ----
-  const bcells = 22; // finer grid → far more ground-cover flora
+  // ---- bushes + scrub: foliage-only ground cover ----
+  // DENSITY: coarser grid (was 22) and a lower chance so ground cover is a light
+  // scatter of distinct shrubs, not a continuous thicket.
+  const bcells = 16;
   const bcs = S / bcells;
   for (let gz = 0; gz < bcells; gz++) {
     for (let gx = 0; gx < bcells; gx++) {
@@ -719,7 +732,7 @@ export function scatterTrees(
       if (surf.path > 0.24 || surf.rock > 0.5 || surf.slope > 0.55) continue;
       const dens = field.forest(x, z);
       // scrub scatters broadly even in the open; thicker toward woodland
-      if (rnd() > 0.42 * (0.35 + dens)) continue;
+      if (rnd() > 0.3 * (0.35 + dens)) continue;
 
       const proto = bushProtos[Math.floor(rnd() * bushProtos.length)];
       const scale = 0.75 + rnd() * 0.75;
@@ -728,9 +741,9 @@ export function scatterTrees(
       const tint = 0.92 + rnd() * 0.16;
       stampFoliage(proto, x, y, z, scale, Math.cos(yaw), Math.sin(yaw), tint);
 
-      // small ground shadow under the bush, offset from the sun
+      // small ground shadow under the bush, offset from the sun (fewer dabs)
       const bShR = proto.canopyR * scale * 0.8;
-      const bN = 5 + Math.floor(rnd() * 5);
+      const bN = 3 + Math.floor(rnd() * 3);
       for (let i = 0; i < bN; i++) {
         const ang = rnd() * Math.PI * 2;
         const rr = bShR * Math.sqrt(rnd());

@@ -122,22 +122,28 @@ function shoulderFairing(geo: THREE.BufferGeometry): THREE.BufferGeometry {
   const pos = geo.attributes.position.array as Float32Array;
   const count = geo.attributes.position.count;
   const cz = WING_ATTACH.z, cy = WING_ATTACH.y;
-  // precompute the gaussian denominators once
-  const izz = 1 / (2 * 0.30 * 0.30), iyy = 1 / (2 * 0.22 * 0.22);
+  // A BROAD, DEEP fillet — not a pimple. The swell is an elongated fleshy ridge
+  // running well fore-and-aft along the back-to-flank so the wing root sits IN a
+  // long shoulder shelf, and it reaches a touch further down the flank, so the
+  // wing's buried fillet has body to melt into all the way along its chord. The
+  // larger gaussian sigmas widen the ridge; the falloff stays smooth so it blends
+  // seamlessly back into the egg of the body (no rim).
+  const izz = 1 / (2 * 0.40 * 0.40), iyy = 1 / (2 * 0.30 * 0.30);
   for (let i = 0; i < count; i++) {
     const k = i * 3;
     const x = pos[k], y = pos[k + 1], z = pos[k + 2];
-    // bump envelope in (z,y): broad along the back-to-breast run, centred on the
-    // shoulder height, so the swell is an elongated fleshy ridge, not a pimple.
     const dz = z - cz, dy = y - cy;
     const env = Math.exp(-(dz * dz) * izz - (dy * dy) * iyy);
     if (env < 1e-3) continue;
     const s = x < 0 ? -1 : 1;
-    // push the flank outward to form the shoulder shelf, and lift it a touch so the
-    // shelf rises to meet the wing root sitting on top of it.
-    const outward = 0.085 * env;
-    const lift = 0.03 * env * smoothstep(0.0, 0.12, Math.abs(x)); // only the upper flank lifts
-    pos[k] = x + s * outward; pos[k + 1] = y + lift;
+    // push the flank outward to form a generous shoulder shelf, and lift the upper
+    // flank more so the shelf rises into a fleshy haunch the wing root sinks into.
+    const outward = 0.115 * env;
+    const lift = 0.05 * env * smoothstep(0.0, 0.14, Math.abs(x)); // upper flank lifts most
+    // ease the very top of the shelf forward a hair so it caps over the wing root
+    // (the haunch overhangs the fillet, hiding the join line as the wing flexes).
+    const cap = 0.018 * env * smoothstep(0.06, 0.16, Math.abs(x));
+    pos[k] = x + s * outward; pos[k + 1] = y + lift; pos[k + 2] = z + cap;
   }
   geo.attributes.position.needsUpdate = true;
   geo.computeVertexNormals();
@@ -415,7 +421,11 @@ function sweepBodySkin(stations: Station[]): SweptSkin {
   boneRest[BONE.NECK2] = new THREE.Vector3(0, 0.6, 0.62);
   boneRest[BONE.NECK3] = new THREE.Vector3(0, 0.69, 0.69);
   boneRest[BONE.HEAD] = new THREE.Vector3(0, 0.71, 0.86); // nape/head joint
-  boneRest[BONE.JAW] = new THREE.Vector3(0, 0.6, 1.16); // bill base (mandible pivot)
+  // The mandible hinges at the JAW joint UNDER the head — not out at the bill base.
+  // Seating the pivot back here (z≈1.0, tucked up under the skull) means the jaw's
+  // buried root rings rotate about the hinge while staying welded into the head
+  // underside: it gapes like a real jaw and can never swing free of the face.
+  boneRest[BONE.JAW] = new THREE.Vector3(0, 0.628, 1.0); // jaw hinge (under the skull)
   for (let b = 0; b < BONE.COUNT; b++) if (!boneRest[b]) boneRest[b] = new THREE.Vector3();
 
   return { geo: g, boneRest };
@@ -428,23 +438,48 @@ function sweepBodySkin(stations: Station[]): SweptSkin {
 // it is still one draw call and one material — it just answers to the jaw bone.)
 // ===========================================================================
 function buildLowerJawSkin(): { geo: THREE.BufferGeometry } {
-  // a down-curved trough that hangs under the bill: swept like the upper bill but
-  // shorter, with a soft swollen pouch volume in the middle (the gular sac).
-  const base = new THREE.Vector3(0, 0.6, 1.16);
-  const N = 12;
-  const len = 0.46;
+  // THE LOWER MANDIBLE + GULAR POUCH, anchored so it can NEVER detach. It is a
+  // down-curved trough whose ROOT begins BACK under the skull (at the jaw hinge,
+  // z≈0.98) — not out at the bill base — and the first rings are fat and lifted so
+  // they sink UP INTO the head's underside and overlap the upper-bill base. From
+  // there it droops into the swollen gular sac, then runs forward under the bill to
+  // close against the upper mandible near the tip. Because the buried root rings
+  // share the head's underside volume (high y, wide rx) there is no gap: the jaw
+  // reads as continuous with the face. Every vertex is weighted to the JAW bone,
+  // which hinges at z≈1.0 under the skull, so the whole trough gapes/closes about
+  // that hinge without ever floating free of the head.
+  // Geometry of the upper run it must meet:
+  //   head underside  ≈ (y 0.60, z 0.95..1.10)
+  //   bill base ring   = (y 0.645, z 1.13, ry 0.05)  → underside ≈ y 0.595
+  //   bill drops to    ≈ (y 0.527, z 1.6) at the tip
+  const hingeZ = 0.98;       // root starts back under the skull
+  const N = 14;
+  const len = 0.66;          // reaches up under the bill toward the tip
   const pts: THREE.Vector3[] = [];
-  const profs: { rx: number; ry: number; sag: number }[] = [];
+  const profs: { rx: number; ry: number; sag: number; buried: number }[] = [];
   for (let i = 0; i < N; i++) {
     const t = i / (N - 1);
-    const z = base.z + t * len;
-    const env = Math.sin(Math.PI * clamp01(t * 1.02)); // pouch bulge envelope
-    const droop = -0.05 - 0.14 * t * t - 0.055 * env;
-    pts.push(new THREE.Vector3(0, base.y + droop, z));
+    const z = hingeZ + t * len;
+    // BURIAL: the first ~18% of the trough is sunk up inside the head underside so
+    // its surface coincides with the face (no seam). `buried` ramps 1 → 0 by ~18%.
+    const buried = smoothstep(0.18, 0.0, t);
+    // pouch bulge envelope — fullest a third of the way along (the swollen sac)
+    const env = Math.sin(Math.PI * clamp01(t * 0.92));
+    // The underside line: lifted to meet the head at the root, drooping into the
+    // pouch, then easing back UP to kiss the upper-bill underside toward the tip so
+    // the two mandibles close with no gap at the far end either.
+    const headMeet = 0.60 + 0.02 * buried;            // root rides up into the face
+    const droop = -0.10 * smoothstep(0.0, 0.5, t) - 0.05 * env; // sag into the sac
+    const closeTip = 0.05 * smoothstep(0.6, 1.0, t);  // rise toward the upper bill tip
+    const y = lerp(headMeet, 0.60, smoothstep(0.0, 0.2, t)) + droop + closeTip;
+    pts.push(new THREE.Vector3(0, y, z));
     profs.push({
-      rx: 0.018 + 0.05 * env,
-      ry: 0.01 + 0.044 * env,
-      sag: 0.6 * env,
+      // root is FAT (fills the head underside so it welds in); the body of the
+      // trough swells with the gular sac; the tip narrows to meet the bill.
+      rx: 0.026 + 0.052 * env + 0.05 * buried,
+      ry: 0.014 + 0.04 * env + 0.05 * buried,
+      sag: 0.55 * env,
+      buried,
     });
   }
   const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.5);
@@ -738,9 +773,12 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
     // chord (fore-aft depth): broad at the arm, tapering to slim primaries. The
     // root chord is broadened further (rootFair) so the membrane fairs into the
     // body as a wide fillet rather than a narrow blade.
-    const rootFair0 = smoothstep(0.22, 0.0, t);
+    // ROOT FAIRING spans the inner ~30% now (was 22%): a longer, more gradual
+    // fillet so the wing melts into the body over a generous run rather than
+    // ducking in over a short stub. `rootFair0` ramps 1 → 0 across that span.
+    const rootFair0 = smoothstep(0.30, 0.0, t);
     const chord = lerp(0.6, 0.12, smoothstep(0.0, 1.0, t)) * (1 - 0.18 * smoothstep(0.7, 1.0, t))
-      * (1 + 0.55 * rootFair0);
+      * (1 + 0.7 * rootFair0); // broaden the root chord more → a wide fillet
     const thick = lerp(0.05, 0.006, t);
     // leading edge sweeps back & bows forward (a smooth curve)
     const le = lerp(0.2, -0.18, t) + 0.05 * Math.sin(t * Math.PI);
@@ -774,17 +812,20 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
       const th = thick * thFactor * (0.4 + 0.6 * camberShape);
       const camber = 0.55 * thick * camberShape * (1 - 0.3 * t);
       let y = camber + droopBase - 0.02 * v * t;
-      // fair the root DOWN into the flank so the membrane sinks into the shoulder
-      // shelf of the body (it disappears into the swell rather than meeting it at a
-      // hard line). The deepest root row drops most, easing out across the fillet.
-      y += -rootFair * 0.05 - rootFair2 * 0.05;
-      // and curl the root edges down a touch (chord-wise) so the fillet wraps the
-      // flank instead of poking out as a flat shelf.
-      y += -rootFair2 * 0.03 * (v - 0.5) * 2;
+      // fair the root DOWN into the flank so the membrane sinks deep into the
+      // shoulder shelf (it disappears into the swell rather than meeting it at a
+      // hard line). Deeper now, to match the bigger fillet: the deepest root row
+      // drops most, easing out smoothly across the fillet so there is no rim.
+      y += -rootFair * 0.07 - rootFair2 * 0.07;
+      // curl the root edges down (chord-wise) so the fillet wraps the flank instead
+      // of poking out as a flat shelf — the leading and trailing root corners tuck
+      // under the haunch.
+      y += -rootFair2 * 0.05 * (v - 0.5) * 2;
       const zr = z + rootFair * 0.12;
-      // pull the root spanwise X toward the body centre-line so it tucks under the
-      // shoulder swell (xFair → 1 keeps tip X, → small at root sinks it inboard).
-      const xFair = 1 - 0.5 * rootFair2;
+      // pull the root spanwise X toward the body centre-line so it tucks deep under
+      // the shoulder swell (xFair → 1 keeps tip X; → small at root sinks it well
+      // inboard, buried inside the haunch rather than perched beside it).
+      const xFair = 1 - 0.62 * rootFair2;
       const xx = WING_ATTACH.x * side + x * xFair;
       // bake the body attachment so bone pivots == geometry joints in span-X
       top.push(xx, WING_ATTACH.y + y + th, WING_ATTACH.z + zr);
@@ -815,10 +856,13 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
     c.copy(C_COVERT_LOW).lerp(base, smoothstep(0.25, 0.7, top01));
     // at the buried root the wing shares the body's colour, so the fairing reads as
     // body skin flowing into wing rather than a coloured flap stuck on the flank.
-    const rootBlend = smoothstep(0.1, 0.0, tspan); // 1 at root → 0 by 10% span
+    // The blend now matches the deeper fillet: full body colour over the buried
+    // root, easing to wing colour by ~22% span — so there is no colour seam where
+    // the fillet emerges, only a soft gradient from flank-grey to covert-grey.
+    const rootBlend = smoothstep(0.22, 0.0, tspan); // 1 at root → 0 by 22% span
     if (rootBlend > 0) {
       const bodyHere = C_BODY.clone().lerp(C_BODY_TOP, smoothstep(0.4, 0.95, top01));
-      c.lerp(bodyHere, rootBlend * 0.85);
+      c.lerp(bodyHere, rootBlend * 0.92);
     }
 
     // --- secondary covert rows: gentle chordwise feather bands across the inner

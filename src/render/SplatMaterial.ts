@@ -17,22 +17,26 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   const mat = new THREE.MeshBasicNodeMaterial();
   mat.fog = false; // we fog manually below
   // Transparent brush-stamps that BLEND at their feathered rims, but with depthWrite
-  // ON and a tight near-opaque core — so dense overlapping strokes melt into a
-  // continuous painted surface without ever needing a per-frame sort (cheap, and
-  // exactly how the reference achieves its soft painterly cohesion). 6.html itself
-  // depthWrite:false + sorts every frame; our no-sort pipeline can't afford that, so
-  // we keep depthWrite ON with an alphaTest that drops the soft rim — the near-opaque
-  // dry-media cores still write clean depth, which keeps the carpet legible while the
-  // feather/bristle does the painterly blending where strokes overlap.
-  // depthWrite OFF so the soft gaussian dabs BLEND into one another (oil-paint
-  // merge) instead of their opaque cores depth-clipping the dabs behind them with a
-  // hard edge. depthTest stays ON, so the solid terrain/trunks/rocks still occlude
-  // them correctly; only inter-splat self-occlusion is dropped. No per-frame sort —
-  // for a dense field of soft small dabs the order artifacts read as painterly.
+  // ON and a real alphaTest — so each dab's near-opaque CORE writes depth. That does
+  // two big jobs at once:
+  //   1) CORRECTNESS: the solid trunks/rocks (drawn first as opaque meshes) keep their
+  //      depth, and foliage dabs that fall behind them are depth-rejected instead of
+  //      painting OVER them — no more green-washed trunks.
+  //   2) PERF: writing depth from the cores restores early-Z, so the mountain of
+  //      overlapping carpet/foliage dabs no longer ALL shade every covered pixel —
+  //      a near dab's core occludes the dabs behind it, collapsing the worst of the
+  //      overdraw (the single biggest fill-rate sink in this scene).
+  // alphaTest ≈ 0.45 keeps the soft feathered rim where it overlaps the core in front
+  // (still blends, since transparent+blend stays on) but discards the empty/low-alpha
+  // rim BEFORE it writes depth, so dabs don't punch hard depth holes around their
+  // edges. Trade-off accepted: stamps read a touch more defined than the ultra-soft
+  // version — correctness + framerate now outweigh the last bit of blend.
+  // 6.html uses depthWrite:false + a per-frame sort; our no-sort pipeline can't afford
+  // that, so this is the cheap, correct equivalent.
   mat.transparent = true;
-  mat.depthWrite = false;
+  mat.depthWrite = true;
   mat.depthTest = true;
-  mat.alphaTest = 0.01; // discard only the fully-empty rim (perf), keep the soft feather
+  mat.alphaTest = 0.45; // core writes depth (early-Z + occludes trunks); rim still blends
 
   const aCenter = attribute('aCenter', 'vec3');
   const aScale = attribute('aScale', 'float');

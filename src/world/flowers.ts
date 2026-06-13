@@ -70,16 +70,21 @@ const CORNFLOWER = new THREE.Color('#5a78d8'); // true cornflower blue
 const POPPY_HEART = new THREE.Color('#241410'); // near-black poppy centre
 const BUTTERCUP = new THREE.Color('#ffd21a'); // glossy deep-yellow cup
 
+// DENSITY/CALM: the catalog is leaned on FEWER, simpler species so drifts read as
+// calm colour rather than a botanical confetti of nine forms. The cheap, legible
+// ray daisies and buttercup/poppy cups dominate; the expensive many-dab Spire and
+// Umbel forms are kept as rare accents (low weight) so they barely appear. Colours
+// are untouched.
 const SPECIES: Species[] = [
-  { form: Form.Ray, petal: palette.flowerWhite, eye: palette.goldenEye, weight: 1.0 }, // ox-eye daisy
-  { form: Form.Ray, petal: palette.flowerYellow, eye: palette.orangeEye, weight: 0.7 }, // yellow daisy
-  { form: Form.Ray, petal: palette.flowerViolet, eye: palette.goldenEye, weight: 0.6 }, // violet aster
-  { form: Form.Ray, petal: palette.flowerLavender, eye: palette.goldenEye, weight: 0.4 }, // lavender aster
+  { form: Form.Ray, petal: palette.flowerWhite, eye: palette.goldenEye, weight: 1.2 }, // ox-eye daisy
+  { form: Form.Ray, petal: palette.flowerYellow, eye: palette.orangeEye, weight: 0.8 }, // yellow daisy
+  { form: Form.Ray, petal: palette.flowerViolet, eye: palette.goldenEye, weight: 0.5 }, // violet aster
+  { form: Form.Ray, petal: palette.flowerLavender, eye: palette.goldenEye, weight: 0.25 }, // lavender aster
   { form: Form.Cup, petal: BUTTERCUP, eye: palette.goldenEye, weight: 0.7 }, // buttercup
-  { form: Form.Cup, petal: POPPY_RED, eye: POPPY_HEART, weight: 0.55 }, // scarlet poppy
-  { form: Form.Ray, petal: CORNFLOWER, eye: palette.goldenEye, weight: 0.45 }, // cornflower
-  { form: Form.Spire, petal: palette.flowerViolet, eye: palette.flowerLavender, weight: 0.32 }, // foxglove spire
-  { form: Form.Umbel, petal: palette.flowerWhite, eye: palette.flowerWhite, weight: 0.3 }, // yarrow umbel
+  { form: Form.Cup, petal: POPPY_RED, eye: POPPY_HEART, weight: 0.4 }, // scarlet poppy
+  { form: Form.Ray, petal: CORNFLOWER, eye: palette.goldenEye, weight: 0.3 }, // cornflower
+  { form: Form.Spire, petal: palette.flowerViolet, eye: palette.flowerLavender, weight: 0.12 }, // foxglove spire (rare)
+  { form: Form.Umbel, petal: palette.flowerWhite, eye: palette.flowerWhite, weight: 0.1 }, // yarrow umbel (rare)
 ];
 const SPECIES_TOTAL = SPECIES.reduce((s, sp) => s + sp.weight, 0);
 
@@ -204,7 +209,7 @@ function emitFlower(
     case Form.Umbel: {
       // A flat lacy cap of many tiny florets (yarrow / cow-parsley): a dense disc
       // of small round dabs rather than distinct rays. Reads as a soft cloud.
-      const florets = 9 + Math.floor(rnd() * 7); // 9..15 tiny dabs
+      const florets = 6 + Math.floor(rnd() * 4); // 6..9 tiny dabs (was 9..15)
       const capR = size * (0.66 + rnd() * 0.3);
       for (let i = 0; i < florets; i++) {
         const a = rnd() * Math.PI * 2;
@@ -249,7 +254,7 @@ function emitFlower(
     default: {
       // Ray: classic flat daisy / aster — a ring of slender ray petals radiating
       // from a central disc eye. The signature meadow form.
-      const petals = 6 + Math.floor(rnd() * 4); // 6..9 ray petals
+      const petals = 5 + Math.floor(rnd() * 3); // 5..7 ray petals (was 6..9)
       const headR = size * (0.62 + rnd() * 0.3);
       const phase = rnd() * Math.PI * 2;
       for (let i = 0; i < petals; i++) {
@@ -325,7 +330,9 @@ export function scatterFlowers(
       const open = 1 - field.forest(px, pz);
       // dry/lime meadows favour flowers a touch more (sunny open turf).
       const sun = field.dry(px, pz);
-      const chance = 0.16 + open * 0.5 + sun * 0.12;
+      // DENSITY: ~halved patch frequency so blooms punctuate the turf rather than
+      // carpet it — calm colour drifts, not a meadow of confetti.
+      const chance = 0.08 + open * 0.26 + sun * 0.06;
       if (rnd() > chance) continue;
 
       // This patch's dominant species → coherent colour drifts, not confetti. A
@@ -335,7 +342,9 @@ export function scatterFlowers(
       const purity = 0.7 + rnd() * 0.25; // fraction of blooms that match the dominant
 
       const patchR = 3 + rnd() * 7;
-      const blooms = 5 + Math.floor(rnd() * (10 + open * 14)); // fuller in the open
+      // DENSITY: ~halved blooms per patch (was 5 + 10..24) — a few blooms read as a
+      // coherent drift; a dense clump just costs instances and looks busy.
+      const blooms = 3 + Math.floor(rnd() * (5 + open * 7)); // fuller in the open
       for (let i = 0; i < blooms; i++) {
         // clustered toward the patch centre (sqrt for a soft falloff)
         const a = rnd() * Math.PI * 2;
@@ -355,7 +364,8 @@ export function scatterFlowers(
 
   // ---- loose drift of singles: thin scatter of lone blooms between patches ----
   // Keeps the punctuation from clumping into islands; very sparse, open-biased.
-  const dcells = 9;
+  // DENSITY: coarser grid (was 9) and a lower chance — just the odd stray bloom.
+  const dcells = 6;
   const dcs = S / dcells;
   for (let gz = 0; gz < dcells; gz++) {
     for (let gx = 0; gx < dcells; gx++) {
@@ -364,7 +374,7 @@ export function scatterFlowers(
       const lit = probe(fx, fz);
       if (lit < 0) continue;
       const open = 1 - field.forest(fx, fz);
-      if (rnd() > 0.06 + open * 0.16) continue; // tasteful, not a carpet
+      if (rnd() > 0.03 + open * 0.09) continue; // tasteful, not a carpet
       const y = field.height(fx, fz);
       const size = 0.65 + rnd() * 0.6;
       // Lone blooms pick freely from the catalog — a stray poppy or cornflower

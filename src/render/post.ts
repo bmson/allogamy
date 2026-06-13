@@ -62,74 +62,80 @@ export function buildPostProcessing(
 
     const raw = scenePassColor.rgb.toVar();
 
+    // ---- SHARED 3x3 NEIGHBOURHOOD ------------------------------------------
+    // The Kuwahara flatten, the bleed/impasto gradient, and the glow all want
+    // the colour at a small ring of offsets. The original code re-sampled those
+    // points independently (16 Kuwahara + 4 bleed-grad + 4 glow + 4 impasto-grad
+    // ≈ 28-32 taps/pixel). We sample ONE 3x3 grid (centre + 4 axis + 4 diagonal
+    // = 9 taps), reuse it for everything, and add 2 short smear taps — ~11 taps,
+    // roughly a 60% cut, while keeping the same painterly result family.
+    const STEP = 1.4; // matches the reference's uPx*1.4 Kuwahara step
+    const c = raw; // centre (already have it)
+    const e = tap(px, STEP, 0); // east
+    const w = tap(px, -STEP, 0); // west
+    const n = tap(px, 0, STEP); // north
+    const s = tap(px, 0, -STEP); // south
+    const ne = tap(px, STEP, STEP);
+    const nw = tap(px, -STEP, STEP);
+    const se = tap(px, STEP, -STEP);
+    const sw = tap(px, -STEP, -STEP);
+
     // ---- 1) KUWAHARA flatten: 4 quadrants, keep the lowest-variance mean ----
-    // Quadrant sign vectors s, matching 6.html:
-    //   q0: (+1,+1)  q1: (-1,+1)  q2: (-1,-1)  q3: (+1,-1)
-    const quadrants: Array<[number, number]> = [
-      [1, 1],
-      [-1, 1],
-      [-1, -1],
-      [1, -1],
-    ];
+    // Same 4 overlapping 2x2 quadrants as the reference, but each quadrant is now
+    // assembled from the SHARED grid samples instead of fresh fetches:
+    //   q0 (+,+): c, e, n, ne   q1 (-,+): c, w, n, nw
+    //   q2 (-,-): c, w, s, sw   q3 (+,-): c, e, s, se
+    const lc = lum(c);
+    const le = lum(e);
+    const lw = lum(w);
+    const ln = lum(n);
+    const ls = lum(s);
+    const lne = lum(ne);
+    const lnw = lum(nw);
+    const lse = lum(se);
+    const lsw = lum(sw);
 
     const bestMean = raw.toVar();
     const bestVar = float(1e9).toVar();
-
-    // Offset step = texel * 1.4 (uPx * 1.4 in the reference).
-    const STEP = 1.4;
-    for (const [sx, sy] of quadrants) {
-      let meanAcc: any = vec3(0.0);
-      let m2Acc: any = float(0.0);
-      for (let i = 0; i <= 1; i++) {
-        for (let j = 0; j <= 1; j++) {
-          const cc = tap(px, i * sx * STEP, j * sy * STEP);
-          meanAcc = meanAcc.add(cc);
-          const l = lum(cc);
-          m2Acc = m2Acc.add(l.mul(l));
-        }
-      }
-      const mean = meanAcc.mul(0.25);
+    const considerQuad = (
+      a: any, b: any, d: any, f: any, la: any, lb: any, ld: any, lf: any,
+    ): void => {
+      const mean = a.add(b).add(d).add(f).mul(0.25);
       const ml = lum(mean);
-      const v = m2Acc.mul(0.25).sub(ml.mul(ml));
-      // if (v < bestVar) { bestVar = v; bestMean = mean; }
+      // variance = E[l²] - E[l]²  (luminance, like the reference)
+      const m2 = la.mul(la).add(lb.mul(lb)).add(ld.mul(ld)).add(lf.mul(lf)).mul(0.25);
+      const v = m2.sub(ml.mul(ml));
       const take = v.lessThan(bestVar);
       bestMean.assign(mix(bestMean, mean, take));
       bestVar.assign(mix(bestVar, v, take));
-    }
+    };
+    considerQuad(c, e, n, ne, lc, le, ln, lne);
+    considerQuad(c, w, n, nw, lc, lw, ln, lnw);
+    considerQuad(c, w, s, sw, lc, lw, ls, lsw);
+    considerQuad(c, e, s, se, lc, le, ls, lse);
 
     const col = mix(raw, bestMean, float(0.45)).toVar();
 
-    // ---- 1.5) OIL-PAINT BLEED: smear colour ALONG the local contour (the isophote,
-    // perpendicular to the luminance gradient) so neighbouring strokes melt and bleed
-    // into one another like wet oil paint. A short symmetric line-blur; strength = uBleed.
-    const bgx = lum(tap(px, 1.5, 0)).sub(lum(tap(px, -1.5, 0)));
-    const bgy = lum(tap(px, 0, 1.5)).sub(lum(tap(px, 0, -1.5)));
-    const blen = bgx.mul(bgx).add(bgy.mul(bgy)).add(1e-5).sqrt();
-    const fdir = vec2(bgy.div(blen), bgx.negate().div(blen)); // isophote ⟂ gradient
+    // ---- 1.5) OIL-PAINT BLEED + IMPASTO GRADIENT (shared) -------------------
+    // Luminance central differences from the SHARED grid (no extra taps) drive
+    // BOTH the contour-aligned bleed AND the impasto relief below.
+    const grad = vec2(le.sub(lw), ln.sub(ls));
+    const blen = grad.x.mul(grad.x).add(grad.y.mul(grad.y)).add(1e-5).sqrt();
+    const fdir = vec2(grad.y.div(blen), grad.x.negate().div(blen)); // isophote ⟂ gradient
+    // Smear ALONG the contour so neighbouring strokes melt like wet oil paint.
+    // Trimmed from a 4-tap symmetric blur to a 2-tap one (the wider ±6 taps added
+    // little over the ±3 pair); strength = uBleed.
     const smear = col
       .add(tapv(px, fdir.mul(3.0)))
       .add(tapv(px, fdir.mul(-3.0)))
-      .add(tapv(px, fdir.mul(6.0)))
-      .add(tapv(px, fdir.mul(-6.0)))
-      .mul(1.0 / 5.0);
+      .mul(1.0 / 3.0);
     col.assign(mix(col, smear, uBleed));
 
-    // ---- 2) HALATION GLOW: 4 diagonal taps, add glow*glow ----
-    const g1 = tap(px, 5, 3);
-    const g2 = tap(px, -5, 3);
-    const g3 = tap(px, 3, -5);
-    const g4 = tap(px, -3, -5);
-    const glow = g1.add(g2).add(g3).add(g4).mul(0.25);
+    // ---- 2) HALATION GLOW: reuse the 4 diagonal grid taps, add glow*glow ----
+    const glow = ne.add(nw).add(se).add(sw).mul(0.25);
     col.addAssign(glow.mul(glow).mul(uGlow.mul(0.22)));
 
-    // ---- 3) IMPASTO RELIEF on a canvas grain ----
-    // Luminance central differences at 1.5 texels.
-    const lx1 = lum(tap(px, 1.5, 0));
-    const lx0 = lum(tap(px, -1.5, 0));
-    const ly1 = lum(tap(px, 0, 1.5));
-    const ly0 = lum(tap(px, 0, -1.5));
-    const grad = vec2(lx1.sub(lx0), ly1.sub(ly0));
-
+    // ---- 3) IMPASTO RELIEF on a canvas grain (reuses `grad`) ----------------
     // fc = uv / texel  (== uv * resolution == fragment coords)
     const fc = screenUV.div(px);
     const canvasGrad = vec2(cos(fc.x.mul(1.55)), cos(fc.y.mul(1.55))).mul(0.01);

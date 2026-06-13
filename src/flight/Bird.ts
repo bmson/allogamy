@@ -307,6 +307,18 @@ export class Bird implements Updatable {
     const mPitch = this.morphPitch; // vertical (Y) body-arc driver (±~0.42)
     const lead = clamp(this.morphRollVel, -0.5, 0.5); // extra lean entering a turn
 
+    // --- BANKING TURN, the signature move: a bird WHEELS, it doesn't yaw flat. ---
+    // Sign of the bank (controller contract, verified): +roll rolls the +X (right)
+    // wing UP and the -X (left) wing DOWN. The LOW wing is always the INSIDE of the
+    // turn — it drops, tucks and sweeps; the HIGH wing is the OUTSIDE — it rises and
+    // reaches. We carve the turn with the whole body: weight rolls into the bank,
+    // the inside wing collapses while the outside wing extends (asymmetric dihedral),
+    // the head/neck lead and tip into it, the tail twists & fans as a rudder. These
+    // scalars (0..1-ish) let every part read off ONE coherent turn intent, eased so
+    // the creature pours into the wheel and unwinds out of it with follow-through.
+    const bankMag = clamp(Math.abs(mRoll) / 0.62, 0, 1);     // 0 level → 1 hard bank
+    const bankMagSoft = bankMag * bankMag * (3 - 2 * bankMag); // smooth ramp for cosmetics
+
     // --- glide vs. flap: mostly soaring, occasionally a run of deep beats ---
     const wantClimb = clamp(this.flight.pitch, 0, 0.42) / 0.42;
     const cycleGate = smooth01(Math.sin(TAU * 0.05 * t) + 0.25);
@@ -318,13 +330,19 @@ export class Bird implements Updatable {
     const drive = Math.sin(ph) - DOWN_BIAS * Math.sin(2 * ph);
     const driveDown = Math.max(0, drive);
 
-    const shoulderZ = REST_DIHEDRAL + 0.7 * drive * amp;
+    // Flap shares: the SHOULDER carries LESS of the raw swing than the elbow/wrist
+    // now, so the big visible beat happens OUTBOARD of the buried wing root. The
+    // root sits near the shoulder pivot and barely moves through the cycle, which is
+    // what keeps the shoulder fairing welded shut as the wing flaps (no seam opens
+    // at the flank). The arm still leads — proximal→distal — but the amplitude grows
+    // toward the hand so the wing unrolls like a whip instead of pumping at the root.
+    const shoulderZ = REST_DIHEDRAL + 0.52 * drive * amp;
     const sweep = 0.12 * Math.sin(ph - 0.4) * amp;
 
     const dl = Math.sin(ph - ELBOW_LAG) - DOWN_BIAS * Math.sin(2 * (ph - ELBOW_LAG));
-    const elbowZ = REST_ELBOW + 0.5 * dl * amp + 0.34 * Math.max(0, -drive) * amp;
+    const elbowZ = REST_ELBOW + 0.58 * dl * amp + 0.34 * Math.max(0, -drive) * amp;
     const wl = Math.sin(ph - WRIST_LAG);
-    const wristZ = REST_WRIST + 0.44 * wl * amp + 0.2 * Math.max(0, -drive) * amp;
+    const wristZ = REST_WRIST + 0.52 * wl * amp + 0.2 * Math.max(0, -drive) * amp;
     // feathering wash: the outboard membrane twists nose-down on the loaded
     // downstroke to bite air, and eases flat (even nose-up) on the recovery so the
     // primaries spill — this washout is the gesture that makes a flap read as WORK,
@@ -334,21 +352,47 @@ export class Bird implements Updatable {
     for (const w of this.wings) {
       const s = w.sgn;
       // The wing bones lie along ±X, so a rotation about Z raises/lowers the tip
-      // (the dihedral / flap) and a rotation about Y sweeps the wing fore/aft.
-      // Each bone bends its faired region of the ONE continuous membrane, so the
-      // wing unrolls as a single flowing skin through the whole beat.
-      // Banking gesture: the inner wing of the turn drops/tucks and the outer wing
-      // lifts & reaches, so the wings morph asymmetrically WITH the banking body
-      // (the dihedral asymmetry that makes a real bird's bank read).
-      const bankWing = mRoll * s; // >0 on the wing toward which we roll
-      w.shoulder.rotation.z = s * shoulderZ + 0.16 * bankWing;
-      w.shoulder.rotation.y = s * sweep - 0.06 * bankWing; // inner wing sweeps back a touch
-      w.elbow.rotation.z = s * elbowZ + 0.10 * bankWing;   // inner wing flexes (shorter span)
-      w.wrist.rotation.z = s * wristZ;
+      // (the dihedral / flap), a rotation about Y sweeps the wing fore/aft, and a
+      // rotation about X twists it spanwise (washout / feathering). Each bone bends
+      // its faired region of the ONE continuous membrane, so the wing unrolls as a
+      // single flowing skin through the whole beat.
+      //
+      // ASYMMETRIC AVIAN BANK. The LOW wing (inside of the turn) and the HIGH wing
+      // (outside) do OPPOSITE things, the gesture that makes a bank read as a bird
+      // wheeling rather than a model tilting:
+      //   lowness  > 0 → this is the inside/low wing  → DROP further, TUCK (flex
+      //                  elbow+wrist so the span shortens), SWEEP back, twist to spill
+      //   highness > 0 → this is the outside/high wing → RISE, EXTEND (open the elbow
+      //                  /wrist so it reaches long), sweep forward, twist to bite
+      // Both are eased through `mRoll`, so the wings morph WITH the rolling body and
+      // settle as the turn unwinds.
+      // tuck > 0 only on the inside/low wing, reach > 0 only on the outside/high
+      // wing. EVERY banking term below carries the side factor `s` so that "drop /
+      // fold / sweep-aft" map to the correct rotation sense on each mirrored wing —
+      // +roll drops the −X wing, −roll drops the +X wing, and the maths is identical.
+      const tuck = Math.max(0, -s * mRoll / 0.62);  // inside/low wing → tuck
+      const reach = Math.max(0, s * mRoll / 0.62);   // outside/high wing → reach
+
+      // SHOULDER (about Z = dihedral): DROP the low wing, LIFT the high wing — an
+      // exaggerated, tasteful split-dihedral that is the heart of the wheel. (`-s`
+      // drops, `+s` raises, for whichever physical wing this is.)
+      w.shoulder.rotation.z = s * shoulderZ - s * 0.46 * tuck + s * 0.30 * reach;
+      // SHOULDER (about Y = sweep): the inside wing sweeps AFT (trailing, shorter
+      // moment arm), the outside wing sweeps slightly FORWARD as it reaches around.
+      w.shoulder.rotation.y = s * sweep + s * (0.22 * tuck - 0.10 * reach);
+
+      // ELBOW (about Z): the low wing FLEXES hard (folds, shortening the span — the
+      // classic tucked inner wing of a banking bird); the high wing EXTENDS (opens
+      // flat to reach long). This span asymmetry is what really sells the wheel.
+      w.elbow.rotation.z = s * elbowZ - s * 0.34 * tuck + s * 0.16 * reach;
+      // WRIST (about Z): continue the fold on the inside, the stretch on the outside.
+      w.wrist.rotation.z = s * wristZ - s * 0.28 * tuck + s * 0.14 * reach;
       // spanwise washout twist (about the wing's ±X axis): nose-down to grab air on
       // the downstroke, spilling on recovery. Mirrored by `s` so both wings wash the
-      // same way relative to airflow, never tearing the continuous membrane.
-      w.wrist.rotation.x = s * washTwist;
+      // same way relative to airflow, never tearing the continuous membrane. In a
+      // bank, the inside wing washes out further (spills lift so that wing sinks)
+      // while the outside wing bites (holds lift to lever it up) — coordinated trim.
+      w.wrist.rotation.x = s * washTwist + s * (0.18 * tuck - 0.12 * reach);
 
       // primary-tip spring: the hand bone trails the wrist and overshoots, then
       // settles — the long primaries' weight read on the continuous skin. A
@@ -362,11 +406,14 @@ export class Bird implements Updatable {
         w.springPos += w.springVel * h;
       }
       if (!isFinite(w.springPos)) { w.springPos = 0; w.springVel = 0; }
-      w.hand.rotation.z = s * (w.springPos * 0.7);
+      // the long primaries of the tucked inner wing fold in further; the outstretched
+      // outer wing splays its fingers — the hand completes the asymmetry at the tips.
+      w.hand.rotation.z = s * (w.springPos * 0.7) - s * 0.22 * tuck + s * 0.10 * reach;
       // feathering twist on reversal: the long primaries flare open as the wing
       // changes direction. Driven by the spring's *velocity* but clamped so a stiff
-      // overshoot can't snap the tip — it stays a supple flick, never a jitter.
-      w.hand.rotation.x = -0.05 + clamp(0.5 * w.springVel, -0.32, 0.32);
+      // overshoot can't snap the tip — it stays a supple flick, never a jitter. The
+      // inside wing's tip washes out a touch more in the turn (spilling air).
+      w.hand.rotation.x = -0.05 + clamp(0.5 * w.springVel, -0.32, 0.32) + s * 0.12 * tuck;
     }
 
     // --- whole-body motion: never rigid. `bob` carries the body AND both wings as
@@ -375,23 +422,28 @@ export class Bird implements Updatable {
     // body morph lives: the bird slips inboard and banks its whole mass into a turn,
     // and rises/sinks and tips through climbs and dives — a living arc, not a slide. ---
     const idle = t * 0.9;
+    const bankSink = -0.045 * bankMagSoft; // settle into a hard bank
     this.bob.position.y = 0.075 * driveDown * amp - 0.028 * Math.cos(ph - BOB_LAG) * amp
       + 0.012 * Math.sin(idle * 0.8)
-      + 0.05 * mPitch;                                  // whole mass rises in a climb
+      + 0.05 * mPitch                                   // whole mass rises in a climb
+      + bankSink;                                       // and settles down into a wheel
     this.bob.position.z = 0.035 * Math.sin(ph - 0.5) * amp;
-    // slip the whole body INBOARD of the turn (banking birds carve toward the inside)
-    this.bob.position.x = 0.02 * Math.sin(idle * 0.6) - 0.06 * mRoll - 0.04 * lead;
+    // slip the whole body INBOARD of the turn (banking birds carve toward the inside
+    // /low wing) and pull harder while rolling IN — the mass swings into the wheel.
+    this.bob.position.x = 0.02 * Math.sin(idle * 0.6) - 0.085 * mRoll - 0.06 * lead;
     // tip the whole creature head-up/down through climbs & dives (Y-axis arc), with
     // a gentle wingbeat porpoise and idle drift layered in.
     this.bob.rotation.x = 0.05 * Math.sin(ph - 0.35) * amp + 0.02 * Math.sin(idle * 0.7)
       + 0.12 * mPitch;
     // the body's roll EASES behind the root's hard bank (a slight counter-roll that
-    // lags the frame), then the leading-edge term lets it surge as it enters a turn
-    // and settle after — so the bank reads weighty and alive, not rigidly locked.
-    this.bob.rotation.z = 0.06 * Math.sin(ph - 1.2) * amp - 0.10 * mRoll + 0.06 * lead;
-    // yaw the whole body into the new heading a touch (the body leads the turn).
+    // lags the frame for weight), then the leading-edge term lets it SURGE into the
+    // bank as it enters a turn and settle after — so the bank reads weighty and alive,
+    // a mass rolling into the wheel, not a rigid model snapping to an angle.
+    this.bob.rotation.z = 0.06 * Math.sin(ph - 1.2) * amp - 0.09 * mRoll + 0.14 * lead;
+    // yaw the whole body into the new heading (the body commits to the turn, leading
+    // it with the chest), enhanced while rolling in.
     this.bob.rotation.y = 0.03 * Math.sin(idle * 0.5) + 0.04 * Math.sin(ph * 0.5 - 0.8) * amp
-      + 0.05 * mRoll;
+      + 0.07 * mRoll + 0.04 * lead;
 
     // --- torso bone: the body breathes against the wingbeat AND arcs with flight.
     // On the loaded downstroke the chest lifts & widens; on recovery it stretches
@@ -444,10 +496,15 @@ export class Bird implements Updatable {
       // bows the whole body smoothly rather than rigidly tipping the head.
       n[i].rotation.x = wave * (0.7 + 0.3 * f) - 0.05 * mPitch * f;
       neckPitchSum += n[i].rotation.x;
-      // lateral arc: progressively curve the neck into the turn (front half sweeps in)
-      n[i].rotation.y = yaw + 0.07 * mRoll * f + 0.03 * lead * f;
-      // a touch of axial roll so the neck banks with the body (no twisting seam)
-      n[i].rotation.z = -0.03 * mRoll * f;
+      // lateral arc: progressively curve the neck into the turn so the whole front
+      // half of the bird sweeps toward the new heading (the neck leads the head into
+      // the wheel). Bent more outboard (×f), spread across four joints → a smooth
+      // welded curve, no kink.
+      n[i].rotation.y = yaw + 0.11 * mRoll * f + 0.05 * lead * f;
+      // axial roll: the neck progressively counter-rolls toward level (each bone
+      // unwinds a little of the body's bank) so by the head the gaze is near
+      // horizontal — the supple neck does the levelling, not a snap at the skull.
+      n[i].rotation.z = -0.07 * mRoll * f;
     }
     // GAZE STABILISATION — the soul of a soaring bird. While the torso heaves with
     // each beat and tips through the arc, the HEAD stays remarkably steady, eyes
@@ -458,10 +515,17 @@ export class Bird implements Updatable {
     const inheritedPitch = this.bTorso.rotation.x + neckPitchSum;
     this.bHead.rotation.x = -0.9 * inheritedPitch - 0.04 * mPitch
       - 0.018 * Math.sin(ph - 1.9) * amp + 0.018 * Math.sin(idle * 0.9);
-    this.bHead.rotation.y = -0.06 * mRoll + 0.025 * Math.sin(idle * 0.55); // glances into turns
-    // counter-roll the head toward level: it tilts only slightly into the bank, the
-    // eyes staying near horizontal (a banking bird keeps its gaze on the world).
-    this.bHead.rotation.z = 0.05 * mRoll - 0.04 * this.bTorso.rotation.z;
+    // The head LEADS the wheel: it turns to point along the new heading (the bird
+    // looks where it is going) and the neck already swept it most of the way there,
+    // so this just finishes the gaze pointing into the turn. (+mRoll → heading +X →
+    // nose toward +X, which is +head.y, so this term is +.)
+    this.bHead.rotation.y = 0.10 * mRoll + 0.025 * Math.sin(idle * 0.55);
+    // GAZE LEVELLING — the soul of a banking bird: while the whole body rolls into
+    // the wheel, the head counter-rolls to keep the eyes near horizontal, locked on
+    // the world. The root applies the full bank (+mRoll about Z); here we roll the
+    // head strongly the OTHER way so the gaze stays level even at a hard bank. This
+    // steady, soulful eye-line is what reads as a living animal carving a turn.
+    this.bHead.rotation.z = -0.34 * mRoll - 0.04 * this.bTorso.rotation.z + 0.05 * lead;
     this.bJaw.rotation.x = 0.018 * driveDown + 0.008 * (0.5 + 0.5 * Math.sin(idle * 0.5)); // bill cracks open under load + soft idle gape
 
     // --- tail: the rear extremity, with the biggest follow-through lag (steers +
@@ -471,8 +535,13 @@ export class Bird implements Updatable {
     // the fan springs from the body and follows it without detaching. ---
     this.bTail.rotation.x = 0.08 * Math.sin(ph - TAIL_LAG) * amp
       + 0.22 * mPitch;                                   // VERTICAL arc: tail lifts in a climb (body bows into a C)
-    this.bTail.rotation.y = -0.26 * mRoll - 0.06 * lead; // swing/fan into the turn (rudder)
-    this.bTail.rotation.z = 0.14 * mRoll;                // bank the fan with the body
+    this.bTail.rotation.y = -0.30 * mRoll - 0.08 * lead; // swing the fan as a rudder, coordinated with the yaw
+    this.bTail.rotation.z = 0.18 * mRoll;                // twist/bank the fan with the body (rudder rolled into the wheel)
+    // the rectrices FAN OPEN in a turn — the tail spreads to bite as a rudder/airbrake,
+    // widening the fan laterally as the bank deepens, then folding back as it unwinds.
+    // Kept modest so the (TAIL-weighted) rump flesh only flares subtly while the fan,
+    // which is the widest, lightest part of that bone's region, reads as spreading.
+    this.bTail.scale.set(1 + 0.16 * bankMagSoft, 1, 1 + 0.04 * bankMagSoft);
 
     // --- trailing legs & feet ---
     for (let i = 0; i < this.legs.length; i++) {

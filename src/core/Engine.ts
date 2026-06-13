@@ -8,12 +8,13 @@ export interface Updatable {
   update(dt: number, t: number): void;
 }
 
-// Cap the device pixel ratio. The painterly post pass is heavily fill-rate bound
-// (a multi-tap Kuwahara + flow bleed + glow over the WHOLE frame), so rendering
-// at the native ratio of a 3x phone or Retina display would triple that cost for
-// detail the soft, blended look throws away anyway. 2 keeps edges crisp on HiDPI
-// while holding the post budget sane.
-const MAX_PIXEL_RATIO = 2;
+// Cap the device pixel ratio. Both the painterly post pass (a multi-tap Kuwahara +
+// flow bleed + glow over the WHOLE frame) AND the dense, heavily-overdrawn splat
+// carpet are fill-rate bound, so fragment cost scales with backbuffer pixels². On a
+// 2× Retina / 3× phone display the native ratio quadruples that work for detail the
+// soft, blended painterly look throws away anyway. 1.5 keeps edges acceptably crisp
+// while cutting fragment work to ~56% of the 2× budget (1.5²/2²) — a big, free win.
+const MAX_PIXEL_RATIO = 1.5;
 
 /**
  * Prefer WebGPU; fall back to a WebGL2 backend if WebGPU is unavailable or its

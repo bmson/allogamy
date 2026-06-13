@@ -176,7 +176,7 @@ export function scatterWeeds(field: TerrainField, cx: number, cz: number): Chunk
   // A small grounding shadow smear under an upright clump (flat, still, offset
   // away from the sun) so vertical accents read as rooted.
   const rootShadow = (x: number, y: number, z: number, r: number) => {
-    const n = 2 + Math.floor(rnd() * 3);
+    const n = 1 + Math.floor(rnd() * 2);
     for (let i = 0; i < n; i++) {
       const a = rnd() * Math.PI * 2;
       const rr = r * Math.sqrt(rnd());
@@ -189,9 +189,9 @@ export function scatterWeeds(field: TerrainField, cx: number, cz: number): Chunk
     }
   };
 
-  // Coarse scatter grid: finer than trees, like the bush grid, so cover is dense
-  // but the candidate count (and thus cost) stays bounded.
-  const cells = 26;
+  // Scatter grid. DENSITY: coarsened (was 26) so the undergrowth is a light plush
+  // hint between the turf and bushes, not a wall-to-wall carpet of cushions.
+  const cells = 17;
   const cs = S / cells;
   for (let gz = 0; gz < cells; gz++) {
     for (let gx = 0; gx < cells; gx++) {
@@ -224,7 +224,9 @@ export function scatterWeeds(field: TerrainField, cx: number, cz: number): Chunk
       // Density: lush near low ground, path edges (worn-track fringe), and the
       // woodland floor; sparse on bright open ridge tops.
       const edge = smoothstep(surf.path, 0.06, 0.24) * (1 - smoothstep(surf.path, 0.24, 0.4));
-      const want = clamp(0.28 + 0.5 * forest + 0.4 * lowness + 0.5 * edge, 0, 1);
+      // DENSITY: lower baseline so open ground stays mostly clear turf; cover still
+      // gathers on the woodland floor, in damp hollows, and along path fringes.
+      const want = clamp(0.14 + 0.4 * forest + 0.32 * lowness + 0.4 * edge, 0, 1);
       if (rnd() > want) continue;
 
       // Per-tuft personality: drier ground & ridges skew toward deep mossy clover
@@ -233,27 +235,31 @@ export function scatterWeeds(field: TerrainField, cx: number, cz: number): Chunk
       const fresh = clamp((damp * 0.5 + forest * 0.3 - dry * 0.4) * 1.4 + (rnd() - 0.5) * 0.6, -1, 1);
 
       // The bulk: a plush domed cushion (clover / weeds / leafy ground cover).
+      // DENSITY: fewer dabs per cushion (was 5 + 0..6 + want*6) — a lighter plush
+      // hint; the shell-biased layout keeps it reading as a rounded clump.
       const tuftScale = 0.55 + rnd() * 0.6;
       const spread = cs * (0.4 + rnd() * 0.5);
-      const cnt = 5 + Math.floor(rnd() * 7 + want * 6);
+      const cnt = 3 + Math.floor(rnd() * 4 + want * 3);
       tuft(x, y, z, tuftScale, spread, cnt, lit, damp, dry, 0.5 + rnd() * 0.2, fresh);
 
       // The minority accent: only some tufts throw up upright blades/stems/fronds.
+      // DENSITY: rarer accents and fewer blades each, so verticals stay an
+      // occasional flourish rather than a fringe on every cushion.
       const r = rnd();
-      if (damp > 0.55 && r < 0.34) {
+      if (damp > 0.55 && r < 0.24) {
         // reeds in damp hollows — taller, cooler, stiffer
-        const blades = 3 + Math.floor(rnd() * 4);
+        const blades = 2 + Math.floor(rnd() * 3);
         upright(x, y, z, 3.2 + rnd() * 2.6, blades, lit, damp, dry, 'reed');
         rootShadow(x, y, z, 1.4);
-      } else if (r < 0.4) {
+      } else if (r < 0.26) {
         // tall-grass / weed spray — the main vertical interest
-        const blades = 3 + Math.floor(rnd() * 4 + forest * 2);
+        const blades = 2 + Math.floor(rnd() * 3 + forest * 2);
         upright(x, y, z, 1.6 + rnd() * 1.6, blades, lit, damp, dry, 'grass');
         rootShadow(x, y, z, 1.0);
-      } else if (forest > 0.45 && r < 0.55) {
+      } else if (forest > 0.45 && r < 0.38) {
         // fern frond on the shaded woodland floor — a few arching blades fanning
         // out from a common crown
-        const blades = 3 + Math.floor(rnd() * 3);
+        const blades = 2 + Math.floor(rnd() * 3);
         upright(x, y, z, 1.4 + rnd() * 1.2, blades, lit * 0.7, damp + 0.15, 0, 'fern');
         rootShadow(x, y, z, 0.9);
       }

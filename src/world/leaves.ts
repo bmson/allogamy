@@ -46,7 +46,9 @@ export function scatterLeaves(field: TerrainField, cx: number, cz: number): Spla
   const cen: number[] = [], scl: number[] = [], col: number[] = [];
   const wnd: number[] = [], ang: number[] = [], asp: number[] = [];
 
-  const cells = 16;
+  // DENSITY: coarser grid (was 16) → fewer clutches; litter drifts under the
+  // densest wood only, not a speckle across the whole floor.
+  const cells = 11;
   const cs = S / cells;
   for (let gz = 0; gz < cells; gz++) {
     for (let gx = 0; gx < cells; gx++) {
@@ -59,7 +61,8 @@ export function scatterLeaves(field: TerrainField, cx: number, cz: number): Spla
       // the overwhelming majority. Leaves gather under/near trees; only a stray few
       // drift into the open. Subtle. (dens: 0 open .. 1 deep woodland.)
       const dens = field.forest(x, z);
-      if (rnd() > 0.05 + dens * 0.55) continue;
+      // DENSITY: strongly gate to deep wood — barely any litter drifts into the open.
+      if (rnd() > 0.02 + dens * 0.42) continue;
 
       // Now the costly surface eval, only for cells that already passed the gate.
       const surf = field.surface(x, z);
@@ -76,7 +79,7 @@ export function scatterLeaves(field: TerrainField, cx: number, cz: number): Spla
       // up where they settle. Denser woodland drops a slightly fuller pile. The
       // clutch is ELONGATED along the wind axis so it reads as a streaked drift, not
       // a round dot — leaves raked into a comet-tail by the breeze.
-      const clutch = 2 + ((rnd() * (2 + dens * 4)) | 0); // 2..7, fuller in deep wood
+      const clutch = 1 + ((rnd() * (1 + dens * 3)) | 0); // 1..4, fuller in deep wood (was 2..7)
       const cwx = Math.cos(WIND_ANGLE), cwz = Math.sin(WIND_ANGLE); // along-wind unit
       const drift = cs * 0.55; // clutch length scale
       for (let i = 0; i < clutch; i++) {
