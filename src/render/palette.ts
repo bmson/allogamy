@@ -12,11 +12,11 @@ export const palette = {
   // sRGB; THREE converts to linear, and these were chosen so the LINEAR values
   // land on the reference's shader colours: zenith vec3(0.55,0.67,0.86), horizon
   // vec3(0.93,0.87,0.8), aerial/fog vec3(0.72,0.75,0.89).
-  skyZenith: new THREE.Color('#c4d6ef'), // soft blue overhead → linear ≈ (0.55,0.67,0.86)
-  skyHorizon: new THREE.Color('#f7f0e7'), // warm pale paper horizon → linear ≈ (0.93,0.87,0.80)
-  fog: new THREE.Color('#dde1f2'), // pale blue-violet aerial haze → linear ≈ (0.72,0.75,0.89)
-  sun: new THREE.Color('#ffeec2'), // warm golden key
-  air: new THREE.Color('#dde1f2'), // distance wash for the splats — matches the airy fog
+  skyZenith: new THREE.Color('#3f93dd'), // bright, happy clear-day blue overhead
+  skyHorizon: new THREE.Color('#cfe8f8'), // luminous pale blue at the horizon
+  fog: new THREE.Color('#cfe8f8'), // (fog effectively off) — bright sky-blue background tone
+  sun: new THREE.Color('#fff0cf'), // warm golden key
+  air: new THREE.Color('#cfe8f8'), // distance wash — matches the bright sky
   shadow: new THREE.Color('#7e86b0'), // luminous blue-violet — shadows never black
   cloud: new THREE.Color('#ffffff'),
   groundBounce: new THREE.Color('#8fc25c'), // hemisphere light, lower hemisphere

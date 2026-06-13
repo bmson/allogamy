@@ -61,7 +61,7 @@ export class Controls {
         name: 'Atmosphere',
         knobs: [
           {
-            id: 'fogNear', label: 'fog near', min: 0, max: 800, step: 5, decimals: 0,
+            id: 'fogNear', label: 'fog near', min: 0, max: 3000, step: 10, decimals: 0,
             get: () => uFogNear.value as number,
             set: (v) => {
               uFogNear.value = v;
@@ -70,7 +70,7 @@ export class Controls {
             },
           },
           {
-            id: 'fogFar', label: 'fog far', min: 100, max: 2000, step: 5, decimals: 0,
+            id: 'fogFar', label: 'fog far', min: 100, max: 4000, step: 10, decimals: 0,
             get: () => uFogFar.value as number,
             set: (v) => {
               uFogFar.value = v;

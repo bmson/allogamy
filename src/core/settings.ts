@@ -18,14 +18,14 @@ import { FOG_NEAR, FOG_FAR, WIND_STRENGTH } from '../config';
 // --- Shader uniforms (live, drive the TSL graph) ---------------------------
 // Post-processing painterly grade (post.ts paint() node).
 export const uGlow = uniform(0.7); // halation glow strength — was const GLOW
-export const uImpasto = uniform(0.5); // canvas relief / texture — was const IMPASTO
-export const uChroma = uniform(1.14); // Monet grade saturation push
+export const uImpasto = uniform(0.0); // canvas relief / texture — was const IMPASTO
+export const uChroma = uniform(1.4); // Monet grade saturation push
 export const uVignette = uniform(1.0); // corner darkening amount
 export const uBleed = uniform(0.08); // oil-paint smear: blend colour along contours (post.ts)
 
 // Splat / stroke shaping (SplatMaterial.ts).
-export const uStrokeBias = uniform(1.5); // length-axis elongation bias (aAspect.add)
-export const uSizeFloor = uniform(0.011); // distance size-floor coefficient (depth.mul)
+export const uStrokeBias = uniform(0.6); // length-axis elongation bias (aAspect.add)
+export const uSizeFloor = uniform(0.004); // distance size-floor coefficient (depth.mul)
 export const uWind = uniform(WIND_STRENGTH); // wind sway strength (config: 1.1)
 export const uSizeJitter = uniform(0.56); // per-stamp size irregularity (1 ± fraction)
 export const uAngleJitter = uniform(1.2); // per-stamp direction irregularity (radians)

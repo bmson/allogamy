@@ -29,8 +29,11 @@ export const WIND_STRENGTH = 1.1;
 // recedes into mist — that dark→light, sharp→soft gradient is what gives the
 // landscape depth. Too close (110) washed the mid-field flat. The far plane still
 // dissolves the hills and the streaming frontier into the cool grey-blue haze.
-export const FOG_NEAR = 200;
-export const FOG_FAR = 560;
+// Fog effectively REMOVED — pushed far beyond the ~800 m loaded world so nothing
+// in view is hazed (bright, clear, happy day). Re-add via the panel's fog sliders
+// or by lowering these. (The splat aerial wash + scene.fog both read these.)
+export const FOG_NEAR = 1500;
+export const FOG_FAR = 3000;
 
 // Camera. Narrower fov → compressed, painting-like framing. Matches 6.html's 52°.
 export const CAM_FOV = 52;

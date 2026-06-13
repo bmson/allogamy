@@ -24,10 +24,15 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   // we keep depthWrite ON with an alphaTest that drops the soft rim — the near-opaque
   // dry-media cores still write clean depth, which keeps the carpet legible while the
   // feather/bristle does the painterly blending where strokes overlap.
+  // depthWrite OFF so the soft gaussian dabs BLEND into one another (oil-paint
+  // merge) instead of their opaque cores depth-clipping the dabs behind them with a
+  // hard edge. depthTest stays ON, so the solid terrain/trunks/rocks still occlude
+  // them correctly; only inter-splat self-occlusion is dropped. No per-frame sort —
+  // for a dense field of soft small dabs the order artifacts read as painterly.
   mat.transparent = true;
-  mat.depthWrite = true;
+  mat.depthWrite = false;
   mat.depthTest = true;
-  mat.alphaTest = 0.04; // drop the empty rim so the cores still write clean depth
+  mat.alphaTest = 0.01; // discard only the fully-empty rim (perf), keep the soft feather
 
   const aCenter = attribute('aCenter', 'vec3');
   const aScale = attribute('aScale', 'float');
@@ -65,11 +70,14 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   // change negligibly so flora/foliage silhouettes are preserved.
   const lenAspect = aAspect.add(uStrokeBias);
   const cl = vec2(positionGeometry.x, positionGeometry.y.mul(lenAspect));
-  // Animated direction wobble: each stamp slowly oscillates its angle over time
-  // (per-stamp phase from j2 so they're decorrelated), amplitude = uAngleJitter.
-  // The strokes KEEP MOVING — living brushwork that shimmers rather than a frozen
-  // grid. (Slow speed → meditative, not frantic.)
-  const jAngle = aAngle.add(sin(time.mul(0.5).add(j2.mul(6.2831))).mul(uAngleJitter));
+  // Direction irregularity, gated by aWind so the wind/wave moves only the LEAVES
+  // and grass — never the road, water, or rocks. Still things (aWind=0) get a FIXED
+  // per-stamp offset (varied directions, no motion); vegetation (aWind>0) gets an
+  // animated wobble that slowly oscillates so the brushwork shimmers and stays alive.
+  const windGate = aWind.clamp(0.0, 1.0);
+  const wobble = sin(time.mul(0.5).add(j2.mul(6.2831))); // -1..1 animated
+  const staticOff = j2.sub(0.5).mul(2.0); // -1..1 fixed per-stamp
+  const jAngle = aAngle.add(mix(staticOff, wobble, windGate).mul(uAngleJitter));
   const csA = cos(jAngle);
   const snA = sin(jAngle);
   const rot = vec2(cl.x.mul(csA).sub(cl.y.mul(snA)), cl.x.mul(snA).add(cl.y.mul(csA)));
