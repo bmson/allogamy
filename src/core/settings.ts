@@ -21,7 +21,7 @@ export const uGlow = uniform(0.7); // halation glow strength — was const GLOW
 export const uImpasto = uniform(0.5); // canvas relief / texture — was const IMPASTO
 export const uChroma = uniform(1.14); // Monet grade saturation push
 export const uVignette = uniform(1.0); // corner darkening amount
-export const uBleed = uniform(0.35); // oil-paint smear: blend colour along contours (post.ts)
+export const uBleed = uniform(0.08); // oil-paint smear: blend colour along contours (post.ts)
 
 // Splat / stroke shaping (SplatMaterial.ts).
 export const uStrokeBias = uniform(1.5); // length-axis elongation bias (aAspect.add)
