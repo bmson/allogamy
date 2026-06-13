@@ -8,6 +8,7 @@ import { scatterTrees, TreeProto } from './tree';
 // (TreeProto covers both trees and bushes)
 import { scatterFlowers } from './flowers';
 import { scatterWeeds } from './weeds';
+import { scatterLeaves } from './leaves';
 import { scatterFauna, ChunkFauna } from './fauna';
 import { buildWater } from './water';
 import { CHUNK_SIZE, CHUNK_RES, SPLATS_PER_CHUNK, SPLAT_DENSITY, WORLD_SEED, SUN_DIR } from '../config';
@@ -298,6 +299,10 @@ export class Chunk {
     // ---- undergrowth: plush ground cover between turf and bushes ----
     const weeds = scatterWeeds(field, cx, cz);
     if (weeds) splatLayers.push(weeds);
+
+    // ---- blowing leaves: wind-stirred leaf litter beneath the trees ----
+    const leaves = scatterLeaves(field, cx, cz);
+    if (leaves) splatLayers.push(leaves);
 
     // ---- water: a rare calm tarn in a low wet hollow (own rng stream) ----
     // Most chunks return null; only the few that hold a deep, wet basin get a pool.

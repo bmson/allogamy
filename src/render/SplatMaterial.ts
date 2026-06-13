@@ -58,7 +58,7 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   // round dabs (aspect≈1) become ~1.12 — barely elongated, reads as a stroke — while
   // blades/stems that already set a large aspect change negligibly, so flora/foliage
   // silhouettes are preserved.
-  const lenAspect = aAspect.add(0.12);
+  const lenAspect = aAspect.add(0.55); // oval, not round → reads as a paint/pencil stroke
   const cl = vec2(positionGeometry.x, positionGeometry.y.mul(lenAspect));
   const csA = cos(aAngle);
   const snA = sin(aAngle);
