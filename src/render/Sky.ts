@@ -23,7 +23,10 @@ export class Sky {
     const c = new THREE.Color();
     for (let i = 0; i < n; i++) {
       const y = geo.attributes.position.getY(i) / 2400;
-      const t = THREE.MathUtils.smoothstep(y, -0.05, 0.55);
+      // Bring the blue DOWN into the visible band: a thin warm horizon (for the
+      // hazed hills to dissolve into) climbs quickly to a luminous sky, so a
+      // low-angle flying view shows real gradient instead of a flat beige wall.
+      const t = THREE.MathUtils.smoothstep(y, 0.0, 0.34);
       c.copy(palette.skyHorizon).lerp(palette.skyZenith, t);
       col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
     }
