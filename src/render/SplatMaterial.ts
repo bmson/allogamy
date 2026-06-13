@@ -1,52 +1,44 @@
 import * as THREE from 'three/webgpu';
 import {
   attribute, uv, vec2, vec3, vec4, float, smoothstep, mix, modelViewMatrix,
-  cameraProjectionMatrix, positionGeometry, time, sin, cos, texture, luminance,
+  cameraProjectionMatrix, positionGeometry, time, sin, cos, fract, luminance,
 } from 'three/tsl';
 import { palette } from './palette';
-import { makeSplatShapeTexture } from './textures';
-import { FOG_NEAR, FOG_FAR } from '../config';
+import { FOG_NEAR, FOG_FAR, WIND_STRENGTH } from '../config';
 
-// Shared organic dab-shape mask (lumpy, non-circular).
-const SHAPE_TEX = makeSplatShapeTexture();
-
-// Splats are camera-facing instanced quads (the real Gaussian-splat primitive —
-// THREE.Points can't be sized on WebGPU). Each instance carries a world centre,
-// a world-space size, and a baked colour. The vertex node billboards the quad in
-// view space; the fragment makes a round soft dab and hazes it with the same
-// linear fog as the terrain so the horizon stays seamless.
-//
-// One shared material; per-instance data lives in the geometry. Works on both
-// the WebGPU and WebGL2 backends.
+// Splats are camera-facing instanced quads. Each instance carries a world centre,
+// a world-space size, a baked colour, a sway weight, and an orientation/elongation
+// (round by default; >1 stretches into a blade/stem). The fragment paints a SOFT,
+// slightly-irregular dab with a wide feathered edge and blends it — so dense
+// overlapping strokes melt into a continuous painted surface rather than reading
+// as a mosaic of separate dabs. Works on the WebGPU and WebGL2 backends.
 
 export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   const mat = new THREE.MeshBasicNodeMaterial();
   mat.fog = false; // we fog manually below
-  mat.transparent = false;
-  mat.depthWrite = true;
-  mat.alphaTest = 0.5;
+  mat.transparent = false; // OPAQUE cutout → early-Z, cheap fill at high density
+  mat.depthWrite = true; // tight alpha + depth handles occlusion (no per-frame sort)
+  mat.depthTest = true;
+  mat.alphaTest = 0.42; // defined notched stamps; density+colour give cohesion
 
   const aCenter = attribute('aCenter', 'vec3');
   const aScale = attribute('aScale', 'float');
   const aColor = attribute('aColor', 'vec3');
   const aWind = attribute('aWind', 'float');
-  const aAngle = attribute('aAngle', 'float'); // stroke orientation (screen-space)
-  const aAspect = attribute('aAspect', 'float'); // stroke width / length
+  const aAngle = attribute('aAngle', 'float'); // orientation (matters when elongated)
+  const aAspect = attribute('aAspect', 'float'); // 1 = round; >1 stretches length (blades/stems)
 
-  // Wind: slow traveling gusts ripple across the field, with a faster flutter on
-  // top for leaf shimmer. Per-instance `aWind` scales it — ground grass barely
-  // moves, canopy leaves move most, dirt/stone not at all.
-  const gust = sin(aCenter.x.mul(0.045).add(aCenter.z.mul(0.05)).add(time.mul(0.85)));
-  const flutter = sin(aCenter.x.mul(0.5).add(aCenter.y.mul(0.35)).add(time.mul(3.4)));
-  const amp = aWind.mul(gust.mul(0.75).add(flutter.mul(0.25)));
-  const wind = vec3(amp.mul(0.95), flutter.mul(aWind).mul(0.15), amp.mul(0.6));
+  // Wind: two-octave travelling gust, +X dominant (half on Z), scaled per-instance
+  // by aWind so grass/leaves sway and dirt/stone/trunks stay put.
+  const gust = sin(aCenter.x.mul(0.13).add(aCenter.z.mul(0.1)).add(time.mul(0.9)))
+    .add(sin(aCenter.x.mul(0.05).sub(aCenter.z.mul(0.04)).add(time.mul(0.5))).mul(0.5));
+  const amp = aWind.mul(WIND_STRENGTH);
+  const wind = vec3(gust.mul(amp), float(0.0), gust.mul(amp).mul(0.5));
 
-  // Billboard brushstroke: place the (wind-swayed) centre in view space, then
-  // build the quad corner — narrowed by aAspect (width/length), rotated by aAngle
-  // to orient the stroke in the image plane, and sized by aScale. Always faces
-  // the camera; distance attenuation is free from the projection.
+  // Billboard: place the swayed centre in view space, then build the quad corner —
+  // stretched along its length by aAspect, rotated by aAngle, sized by aScale.
   const centerView = modelViewMatrix.mul(vec4(aCenter.add(wind), 1.0));
-  const cl = vec2(positionGeometry.x.mul(aAspect), positionGeometry.y);
+  const cl = vec2(positionGeometry.x, positionGeometry.y.mul(aAspect));
   const csA = cos(aAngle);
   const snA = sin(aAngle);
   const rot = vec2(cl.x.mul(csA).sub(cl.y.mul(snA)), cl.x.mul(snA).add(cl.y.mul(csA)));
@@ -54,24 +46,30 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   const viewPos = vec4(centerView.xyz.add(vec3(corner, 0.0)), 1.0);
   mat.vertexNode = cameraProjectionMatrix.mul(viewPos);
 
-  // The lumpy shape mask, stretched across the elongated quad → an organic
-  // bristle stroke whose orientation is the quad's aAngle.
-  const uvc = uv();
-  mat.opacityNode = texture(SHAPE_TEX, uvc).x;
-  // Per-dab dimension: each stroke is brighter at its core and darker toward the
-  // rim, so the carpet reads as thousands of lit daubs, not flat colour.
-  const rimD = uvc.sub(vec2(0.5, 0.5)).length();
-  const dab = float(0.72).add(smoothstep(0.5, 0.1, rimD).mul(0.3));
+  // Soft analytic dab: a slightly-irregular round falloff (wobble seeded from the
+  // world position so each differs) with a WIDE feathered edge → strokes feather
+  // into each other. No hard cutoff, no per-dab texture.
+  const p = uv().sub(vec2(0.5, 0.5)).mul(2.0); // -1..1
+  const rad = p.length();
+  const seed = fract(sin(aCenter.x.mul(12.9898).add(aCenter.z.mul(78.233))).mul(43758.5453)).mul(6.2831);
+  const wob = float(0.84)
+    .add(sin(p.x.mul(8.0).add(seed)).mul(0.06))
+    .add(sin(p.y.mul(6.0).sub(seed.mul(1.3))).mul(0.05));
+  const edge = smoothstep(wob.sub(0.28), wob, rad); // tight feathered rim → defined stamp
+  mat.opacityNode = float(1.0).sub(edge);
+  // hand-painted volume: darker rim + a grounding shadow at the bottom of the stamp
+  const ground = smoothstep(0.25, float(-0.9), p.y).mul(0.16);
+  const dab = float(1.0).sub(edge.mul(0.22)).sub(ground);
 
-  // Aerial perspective: with distance, desaturate toward grey then dissolve into
-  // the pale lavender air — strokes end in atmosphere, never at a hard edge.
+  // Aerial perspective: desaturate slightly then dissolve into the pale air so
+  // strokes end in atmosphere, never at a hard edge.
   const depth = centerView.z.negate();
   const fogF = smoothstep(float(FOG_NEAR), float(FOG_FAR), depth);
   const air = vec3(palette.air.r, palette.air.g, palette.air.b);
-  const shaded = aColor.mul(dab); // per-dab rim shading
+  const shaded = aColor.mul(dab);
   const lum = luminance(shaded);
   const desat = mix(shaded, vec3(lum, lum, lum), fogF.mul(0.2));
-  mat.colorNode = mix(desat, air, fogF.mul(0.5));
+  mat.colorNode = mix(desat, air, fogF.mul(0.55));
 
   return mat;
 }

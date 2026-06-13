@@ -6,7 +6,7 @@ import { buildSplatGeometry } from '../render/SplatMaterial';
 import { buildBoulders } from './rock';
 import { scatterTrees, TreeProto } from './tree';
 // (TreeProto covers both trees and bushes)
-import { CHUNK_SIZE, CHUNK_RES, SPLATS_PER_CHUNK, WORLD_SEED, SUN_DIR } from '../config';
+import { CHUNK_SIZE, CHUNK_RES, SPLATS_PER_CHUNK, SPLAT_DENSITY, WORLD_SEED, SUN_DIR } from '../config';
 
 // Normalised sun direction, for baking slope shading into the splats.
 const _sun = new THREE.Vector3(...SUN_DIR).normalize();
@@ -110,7 +110,7 @@ export class Chunk {
     this.group.add(new THREE.Mesh(mg, meshMat));
 
     // ---- painterly splats + wildflowers (instanced billboards) ----
-    const N = SPLATS_PER_CHUNK;
+    const N = Math.round(SPLATS_PER_CHUNK * SPLAT_DENSITY);
     const centers = new Float32Array(N * 3);
     const scales = new Float32Array(N);
     const colors = new Float32Array(N * 3);
@@ -132,54 +132,55 @@ export class Chunk {
       const x = ox + u * S;
       const z = oz + v * S;
       const y = bilin(H, dim, gx, gz);
-      field.mixColor(x, z, y, slope, path, rock, cc);
 
-      // Fine grass dabs — small for higher fidelity; canopies read as much
-      // larger masses, and the matching mesh below covers the gaps.
-      let scale = 0.8 + rnd() * 0.95;
-      let wind = 0.2;
-      // brushstroke orientation: grass blades near-vertical & thin
-      let angle = (rnd() - 0.5) * 0.7;
-      let aspect = 0.18 + rnd() * 0.1;
-
-      // Grass: lush fine dabs with a wildflower speckle and darker undertones for
-      // depth. Bare ground (paths/rock): dense small gravelly dabs (mixColor has
-      // already tinted them dirt/stone) with the odd pale pebble.
-      const grassy = path < 0.3 && rock < 0.4;
-      if (grassy) {
-        const r = rnd();
-        if (r < 0.05) { cc.copy(palette.flowerWhite); scale = 0.55 + rnd() * 0.45; wind = 0.12; angle = rnd() * Math.PI; aspect = 0.8 + rnd() * 0.12; }
-        else if (r < 0.085) { cc.copy(palette.flowerYellow); scale = 0.55 + rnd() * 0.45; wind = 0.12; angle = rnd() * Math.PI; aspect = 0.8 + rnd() * 0.12; }
-        else {
-          // Vibrant turf: lots of bright sunlit tips, a little shade for depth,
-          // and a saturation bump so the green really sings.
-          const v = rnd();
-          const light = v < 0.32 ? 0.05 + rnd() * 0.1 // sunlit tips
-            : v < 0.46 ? -0.04 - rnd() * 0.05 // a touch of shade
-              : (rnd() - 0.5) * 0.06;
-          cc.offsetHSL((rnd() - 0.5) * 0.04, 0.05 + rnd() * 0.09, light);
-          wind = 0.16 + (scale - 1.2) * 0.12; // taller blades sway a touch more
-        }
-      } else {
-        scale = 0.9 + rnd() * 0.8; // pebbly, fills the track without grass tufts
-        wind = 0; // dirt & stone don't move
-        angle = Math.PI / 2 + (rnd() - 0.5) * 0.9; // dragged across the track
-        aspect = 0.3 + rnd() * 0.18;
-        if (rnd() < 0.12) cc.copy(palette.rock).lerp(palette.rockShadow, rnd());
-        else cc.offsetHSL((rnd() - 0.5) * 0.02, (rnd() - 0.5) * 0.06, (rnd() - 0.4) * 0.1);
-      }
-
-      // Sun shading by terrain slope so hillsides have light & shade — the main
-      // cure for flatness. ny from nx,nz; brighten sun-facing, darken away.
+      // Sun term, so colour is coupled to the light (warm lit / cool shade).
       const nx = bilin(NX, dim, gx, gz);
       const nz = bilin(NZ, dim, gx, gz);
       const ny = Math.sqrt(Math.max(0, 1 - nx * nx - nz * nz));
       const ndotl = nx * SUNX + ny * SUNY + nz * SUNZ;
-      const shade = THREE.MathUtils.clamp(0.6 + 0.55 * ndotl, 0.5, 1.12);
-      cc.multiplyScalar(shade);
+      const lit = THREE.MathUtils.clamp(0.5 + 0.5 * ndotl, 0, 1);
+
+      let scale = 0.85 + rnd() * 0.95;
+      let wind = 0.45;
+      let angle = 0;
+      let aspect = 0.92 + rnd() * 0.26; // round-ish dabs (1 ≈ round)
+      let yoff = 0.4 + rnd() * 1.0;
+
+      const grassy = path < 0.3 && rock < 0.4;
+      if (grassy) {
+        if (rnd() < 0.04) {
+          // wildflower fleck floating just above the grass — colour punctuation
+          const f = rnd();
+          if (f < 0.55) cc.copy(palette.flowerWhite);
+          else if (f < 0.85) cc.copy(palette.flowerYellow);
+          else cc.copy(palette.flowerViolet);
+          scale = 0.5 + rnd() * 0.45; yoff = 0.7 + rnd() * 0.9; wind = 0.5;
+        } else {
+          // Light-coupled HSL turf: warm sunlit yellow-green → cool deep shade,
+          // hot-lime dry patches, occasional deep-shadow pockets. Light is baked
+          // into lightness here (do NOT also multiply by shade).
+          const tint = field.tint(x, z) * 0.5 + 0.5;
+          let h = 0.32 - lit * 0.11 + (tint - 0.5) * 0.05;
+          let s = 0.58 + (1 - lit) * 0.12 + tint * 0.05;
+          let l = 0.16 + lit * 0.42 + (rnd() - 0.5) * 0.08;
+          if (field.dry(x, z) > 0.62) { h = 0.19; s = 0.74; l = 0.5 + lit * 0.12; }
+          if (rnd() < 0.1) l *= 0.6; // deep-shadow pockets
+          cc.setHSL(h, s, THREE.MathUtils.clamp(l, 0.05, 0.95));
+          wind = 0.4 + rnd() * 0.15;
+        }
+      } else {
+        // bare ground: dirt/pebble dabs (mixColor tints them), shaded by sun
+        field.mixColor(x, z, y, slope, path, rock, cc);
+        const shade = THREE.MathUtils.clamp(0.62 + 0.5 * ndotl, 0.5, 1.12);
+        if (rnd() < 0.12) cc.copy(palette.rock).lerp(palette.rockShadow, rnd());
+        cc.multiplyScalar(shade);
+        scale = 0.9 + rnd() * 0.8;
+        wind = 0;
+        aspect = 0.95 + rnd() * 0.2;
+      }
 
       centers[w * 3] = x;
-      centers[w * 3 + 1] = y + 0.4 + rnd() * 1.0;
+      centers[w * 3 + 1] = y + yoff;
       centers[w * 3 + 2] = z;
       scales[w] = scale;
       colors[w * 3] = cc.r; colors[w * 3 + 1] = cc.g; colors[w * 3 + 2] = cc.b;

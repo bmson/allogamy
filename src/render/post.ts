@@ -19,7 +19,7 @@ export function buildPostProcessing(
 
   // soft halation glow — kept restrained so it lifts highlights without washing
   // the whole frame to milk (the "grading not there / too flat" fix).
-  const bloomPass = bloom(scenePassColor, 0.28, 0.8, 0.12);
+  const bloomPass = bloom(scenePassColor, 0.12, 0.8, 0.1);
   const composed = scenePassColor.add(bloomPass);
 
   // Impressionist-realism grade: keep rich saturated colour (paintings aren't
@@ -28,7 +28,7 @@ export function buildPostProcessing(
   const monetGrade = Fn(([rgba]: [any]) => {
     const lifted = rgba.rgb.mul(0.965).add(0.022); // small black-lift only
     const l1 = luminance(lifted);
-    let col: any = mix(vec3(l1, l1, l1), lifted, float(1.22)); // +22% chroma → richer
+    let col: any = mix(vec3(l1, l1, l1), lifted, float(1.10)); // +10% chroma → richer
     col = col.add(vec3(0.045, 0.02, -0.02).mul(l1)); // warm the lights
     col = col.add(vec3(-0.012, 0.0, 0.04).mul(l1.oneMinus())); // cool the shadows
     const vg = screenUV.sub(0.5);

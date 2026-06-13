@@ -48,18 +48,32 @@ function barkColor(rnd: () => number): THREE.Color {
     .offsetHSL((rnd() - 0.5) * 0.02, (rnd() - 0.5) * 0.06, (rnd() - 0.5) * 0.08).clone();
 }
 
-function foliageColor(rnd: () => number, type: TreeType): THREE.Color {
-  // Lower-contrast palette: brights are common, darks are softened (lerped only
-  // partway toward the dark tone) so no near-black dabs stick out of the canopy.
+const clamp = THREE.MathUtils.clamp;
+
+// Light-coupled foliage colour — the same technique that made the turf read:
+// the canopy's baked lighting (`lit`, 0 deep interior shade .. 1 sunlit crown)
+// drives hue AND lightness, so sunlit leaves warm toward lime and shaded leaves
+// deepen toward saturated blue-green. Nothing here multiplies by a separate
+// shade term (the light is baked in), so no near-black dabs stick out.
+function foliageColor(rnd: () => number, type: TreeType, lit: number): THREE.Color {
+  let h: number, s: number, l: number;
   if (type === 'conifer') {
-    _col.copy(palette.conifer).lerp(palette.coniferDark, rnd() * 0.45);
+    // deep spruce blue-green; stays cool and saturated, lit tips lift a little
+    h = 0.345 - lit * 0.05 + (rnd() - 0.5) * 0.02;
+    s = 0.5 + (1 - lit) * 0.12 + rnd() * 0.06;
+    l = 0.14 + lit * 0.36 + (rnd() - 0.5) * 0.05;
+  } else if (type === 'bush') {
+    // warmer, brighter yellow-greens for low foliage catching light
+    h = 0.30 - lit * 0.08 + (rnd() - 0.5) * 0.03;
+    s = 0.55 + (1 - lit) * 0.1 + rnd() * 0.06;
+    l = 0.18 + lit * 0.40 + (rnd() - 0.5) * 0.06;
   } else {
-    const r = rnd();
-    if (r < 0.24) _col.copy(palette.foliage).lerp(palette.foliageLight, 0.5 + rnd() * 0.5);
-    else if (r < 0.36) _col.copy(palette.foliage).lerp(palette.foliageDark, rnd() * 0.5);
-    else _col.copy(palette.foliage).lerp(palette.foliageLight, rnd() * 0.45);
+    // broadleaf: shade deep green → sunlit lime
+    h = 0.32 - lit * 0.10 + (rnd() - 0.5) * 0.025;
+    s = 0.56 + (1 - lit) * 0.12 + rnd() * 0.05;
+    l = 0.16 + lit * 0.44 + (rnd() - 0.5) * 0.07;
   }
-  return _col.offsetHSL((rnd() - 0.5) * 0.03, (rnd() - 0.5) * 0.08, (rnd() - 0.5) * 0.07).clone();
+  return _col.setHSL(clamp(h, 0, 1), clamp(s, 0, 1), clamp(l, 0.04, 0.95)).clone();
 }
 
 /** Append a tapered cylinder (flat-shaded) between a→b into the trunk arrays. */
@@ -135,18 +149,16 @@ function emitBlob(
     const oz = Math.sin(phi) * s * r;
     fp.push(cx + ox, cy + oy, cz + oz);
     fs.push(baseScale * (0.75 + rnd() * 0.7));
-    // leafy strokes wrap tangentially around the clump
-    fa.push(Math.atan2(oz, ox) + Math.PI / 2 + (rnd() - 0.5) * 0.8);
-    fasp.push(0.45 + rnd() * 0.28);
-    const c = foliageColor(rnd, type);
-    // Baked shading so the canopy reads as a lit volume, not a flat blob:
-    // top-lit, interior ambient-occluded, sun-facing side brightened.
+    // round leaf-clump dabs (aspect ≈ 1); orientation only jitters the silhouette
+    fa.push(rnd() * Math.PI);
+    fasp.push(0.92 + rnd() * 0.18);
+    // Baked canopy light → drives the colour: top-lit, sun-facing brightened,
+    // rim catching light, interior in shade. No separate shade multiply.
     const topness = oy * inv * 0.5 + 0.5;
     const aoR = Math.sqrt(ox * ox + oy * oy + oz * oz) * inv;
     const sun = (ox * -0.5 + oz * -0.62) * inv;
-    // Gentle shading — narrow range so the canopy has form without harsh spots.
-    const shade = Math.min(1.1, Math.max(0.74, (0.82 + 0.18 * topness) * (0.88 + 0.12 * aoR) * (1 + 0.07 * sun)));
-    c.multiplyScalar(shade);
+    const lit = clamp(0.34 + 0.4 * topness + 0.16 * aoR + 0.12 * sun, 0, 1);
+    const c = foliageColor(rnd, type, lit);
     fc.push(c.r, c.g, c.b);
     // outer/upper leaves sway most
     fw.push(windBase * (0.5 + 0.5 * topness) * (0.7 + 0.5 * aoR));
@@ -230,16 +242,15 @@ function buildConifer(rnd: () => number): TreeProto {
       const rr = ringR * (0.4 + rnd() * 0.6);
       fp.push(Math.cos(ang) * rr + lean.x * cy, cy + (rnd() - 0.5) * ringR * 0.3, Math.sin(ang) * rr + lean.z * cy);
       fs.push((1.25 + rnd() * 0.9) * (0.7 + (1 - f) * 0.6));
-      const c = foliageColor(rnd, 'conifer');
-      // shading: lower skirts in shadow, top tiers lit, interior occluded
+      // baked light: lower skirts in shadow, top tiers lit, sun-facing brightened
       const aoR = rr / (ringR + 1e-3);
       const sun = Math.cos(ang) * -0.5 + Math.sin(ang) * -0.62;
-      const shade = Math.min(1.18, Math.max(0.42, (0.5 + 0.5 * f) * (0.72 + 0.28 * aoR) * (1 + 0.13 * sun)));
-      c.multiplyScalar(shade);
+      const lit = clamp(0.28 + 0.42 * f + 0.18 * aoR + 0.12 * sun, 0, 1);
+      const c = foliageColor(rnd, 'conifer', lit);
       fc.push(c.r, c.g, c.b);
       fw.push(0.55 * (0.3 + 0.7 * f)); // conifers are stiffer; tips sway a little
       fa.push(ang + Math.PI / 2 + (rnd() - 0.5) * 0.5); // sprays radiate from the spire
-      fasp.push(0.22 + rnd() * 0.12);
+      fasp.push(1.0 + rnd() * 0.22); // mild elongation → needle-spray feel
     }
   }
   return finalize('conifer', tp, tn, tc, fp, fs, fc, fw, fa, fasp, H, baseR);
@@ -296,17 +307,18 @@ function buildBush(rnd: () => number, scrub: boolean): TreeProto {
     const py = cy + Math.abs(u) * rr * 0.7; // bias to the upper surface
     const pz = Math.sin(phi) * s * rr;
     const r = rnd();
-    if (r < 0.45) _col.copy(palette.blossom);
-    else if (r < 0.6) _col.copy(palette.flowerYellow);
-    else if (r < 0.82) _col.copy(palette.berryRed);
+    if (r < 0.30) _col.copy(palette.blossom);
+    else if (r < 0.52) _col.copy(palette.flowerViolet); // ~22% violet punctuation
+    else if (r < 0.66) _col.copy(palette.flowerYellow);
+    else if (r < 0.85) _col.copy(palette.berryRed);
     else _col.copy(palette.berryDeep);
     _col.offsetHSL((rnd() - 0.5) * 0.03, (rnd() - 0.5) * 0.06, (rnd() - 0.5) * 0.06);
     fp.push(px, py, pz);
     fs.push(0.7 + rnd() * 0.7); // small bright accents
     fc.push(_col.r, _col.g, _col.b);
     fw.push(0.3 + rnd() * 0.2);
-    fa.push(rnd() * Math.PI); // blossoms/berries are roundish dabs
-    fasp.push(0.82 + rnd() * 0.12);
+    fa.push(rnd() * Math.PI); // blossoms/berries are round dabs
+    fasp.push(0.92 + rnd() * 0.16);
   }
   return finalize('bush', [], [], [], fp, fs, fc, fw, fa, fasp, R * 1.6, R);
 }
@@ -387,7 +399,7 @@ export function scatterTrees(
   };
 
   // ---- trees: trunk geometry + foliage + contact shadow ----
-  const cells = 8;
+  const cells = 13; // finer scatter grid → more, better-spaced trees
   const cellSize = S / cells;
   for (let gz = 0; gz < cells; gz++) {
     for (let gx = 0; gx < cells; gx++) {
@@ -396,7 +408,8 @@ export function scatterTrees(
       const surf = field.surface(x, z);
       if (surf.path > 0.2 || surf.rock > 0.4 || surf.slope > 0.46) continue;
       const dens = field.forest(x, z);
-      if (rnd() > 0.22 + dens * 1.0) continue;
+      // clumped into woodland (dense), clearings stay open
+      if (rnd() > 0.42 * (0.35 + dens)) continue;
 
       const proto = treeProtos[Math.floor(rnd() * treeProtos.length)];
       const scale = 0.95 + rnd() * 0.8;
@@ -433,14 +446,14 @@ export function scatterTrees(
         fcol.push(palette.foliageDark.r * 0.3, palette.foliageDark.g * 0.3, palette.foliageDark.b * 0.3);
         fwd.push(0);
         fang.push(shadowAngle + (rnd() - 0.5) * 0.5);
-        fasp.push(0.3 + rnd() * 0.15);
+        fasp.push(0.92 + rnd() * 0.22);
       }
       placed++;
     }
   }
 
   // ---- bushes + scrub: foliage-only ground cover, dense everywhere ----
-  const bcells = 11;
+  const bcells = 22; // finer grid → far more ground-cover flora
   const bcs = S / bcells;
   for (let gz = 0; gz < bcells; gz++) {
     for (let gx = 0; gx < bcells; gx++) {
@@ -450,7 +463,7 @@ export function scatterTrees(
       if (surf.path > 0.24 || surf.rock > 0.5 || surf.slope > 0.55) continue;
       const dens = field.forest(x, z);
       // scrub scatters broadly even in the open; thicker toward woodland
-      if (rnd() > 0.36 + dens * 0.5) continue;
+      if (rnd() > 0.42 * (0.35 + dens)) continue;
 
       const proto = bushProtos[Math.floor(rnd() * bushProtos.length)];
       const scale = 0.75 + rnd() * 0.75;
@@ -470,7 +483,7 @@ export function scatterTrees(
         fcol.push(palette.bushDark.r * 0.34, palette.bushDark.g * 0.34, palette.bushDark.b * 0.34);
         fwd.push(0);
         fang.push(shadowAngle + (rnd() - 0.5) * 0.5);
-        fasp.push(0.3 + rnd() * 0.15);
+        fasp.push(0.92 + rnd() * 0.22);
       }
       placed++;
     }

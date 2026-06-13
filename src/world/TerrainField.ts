@@ -22,6 +22,7 @@ export class TerrainField {
   private pN: Noise2D; // paths
   private rN: Noise2D; // rock patches
   private fN: Noise2D; // forest density
+  private dN: Noise2D; // dry/lime patches
 
   constructor(seed: number) {
     this.hN = new Noise2D(seed);
@@ -29,6 +30,12 @@ export class TerrainField {
     this.pN = new Noise2D((seed * 31 + 101) >>> 0);
     this.rN = new Noise2D((seed * 53 + 17) >>> 0);
     this.fN = new Noise2D((seed * 71 + 211) >>> 0);
+    this.dN = new Noise2D((seed * 89 + 307) >>> 0);
+  }
+
+  /** Dry/lime patches in [0,1] — drives hot-lime grass overrides. */
+  dry(x: number, z: number): number {
+    return this.dN.fbm(x * 0.0055, z * 0.0055, 3) * 0.5 + 0.5;
   }
 
   /** Forest density in [0,1] — clumps of woodland with clearings between. */
@@ -40,8 +47,10 @@ export class TerrainField {
   height(x: number, z: number): number {
     const continent = this.hN.fbm(x * 0.0009, z * 0.0009, 3); // broad rolling hills
     const hills = this.hN.fbm(x * 0.0042 + 100, z * 0.0042 - 50, 4);
+    const ridges = this.hN.fbm(x * 0.0021 - 40, z * 0.0021 + 70, 3); // mid-scale relief
     const detail = this.hN.fbm(x * 0.02, z * 0.02, 2);
-    let y = continent * 62 + hills * 21 + detail * 3;
+    // Taller, more pronounced hills for depth and overlapping ridgelines.
+    let y = continent * 105 + ridges * 55 + hills * 26 + detail * 3.5;
     // Carve paths a touch lower so they read as worn tracks.
     y -= this.pathMask(x, z) * 1.4;
     return y;

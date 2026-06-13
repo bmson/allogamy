@@ -8,19 +8,22 @@ export const CHUNK_SIZE = 160; // metres per chunk edge
 export const CHUNK_RES = 36; // heightfield quads per chunk edge (~4.4 m cells)
 
 // Streaming radii, measured in chunks from the bird.
-export const LOAD_RADIUS = 6; // generate out to this ring (6 * 160 = 960 m)
-export const UNLOAD_RADIUS = 7; // keep until this ring, then free
+export const LOAD_RADIUS = 5; // generate out to this ring (5 * 160 = 800 m)
+export const UNLOAD_RADIUS = 6; // keep until this ring, then free
 
-// Splat density per chunk (the painterly billboard layer over the solid mesh).
-// Finer, denser dabs for higher fidelity; the colour-matched mesh underneath
-// fills micro-gaps so we don't have to brute-force density (keeps perf sane).
-export const SPLATS_PER_CHUNK = 22000;
+// Splat density per chunk — high, for the wall-to-wall painted carpet. Tune live
+// via SPLAT_DENSITY without touching code if perf needs it.
+export const SPLATS_PER_CHUNK = 40000;
+export const SPLAT_DENSITY = 1.0;
+
+// Wind sway strength (world units), scaled per-instance by aWind.
+export const WIND_STRENGTH = 1.1;
 
 // Fog hides the streaming frontier: new chunks are born beyond FOG_FAR (inside
 // the haze) and never visibly pop in. LOAD_RADIUS*CHUNK_SIZE must exceed FOG_FAR.
-// Pushed out so nearby terrain stays crisp and saturated; haze only far off.
-export const FOG_NEAR = 520;
-export const FOG_FAR = 900;
+// Tighter now to bound the dense visible set and deepen the painterly haze.
+export const FOG_NEAR = 420;
+export const FOG_FAR = 720;
 
 // Camera. Narrower fov → compressed, painting-like framing (cf. reference).
 export const CAM_FOV = 54;
