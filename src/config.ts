@@ -11,7 +11,9 @@ export const CHUNK_RES = 36; // heightfield quads per chunk edge (~4.4 m cells)
 // sits comfortably beyond FOG_FAR (560 m), so new chunks are born ~240 m deep in
 // the haze — invisible — and have ~5 s of flight to generate before they emerge.
 export const LOAD_RADIUS = 5; // generate out to this ring (5 * 160 = 800 m)
-export const UNLOAD_RADIUS = 6; // keep until this ring, then free
+export const UNLOAD_RADIUS = 5; // free as soon as out of load range — the Chebyshev
+// box at 6 retained far more chunks than the disc ever fills; they sit past FOG_FAR
+// so dropping to 5 shrinks the live set toward the ~89 disc with no visible pop.
 
 // Splat density per chunk — high, for the wall-to-wall painted carpet. Tune live
 // via SPLAT_DENSITY without touching code if perf needs it.

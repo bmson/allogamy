@@ -42,11 +42,18 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   // Billboard: place the swayed centre in view space, then build the quad corner —
   // stretched along its length by aAspect, rotated by aAngle, sized by aScale.
   const centerView = modelViewMatrix.mul(vec4(aCenter.add(wind), 1.0));
+  const depth = centerView.z.negate();
+  // Gaussian-splat size FLOOR (the reference's signature trait): a dab never
+  // projects below a minimum apparent size, so distant dabs grow just enough to
+  // keep overlapping into a solid, plush carpet instead of thinning into
+  // see-through gaps. The floor scales with depth (≈ constant pixels); near dabs
+  // (small depth) keep their authored world size untouched.
+  const effScale = aScale.max(depth.mul(0.003));
   const cl = vec2(positionGeometry.x, positionGeometry.y.mul(aAspect));
   const csA = cos(aAngle);
   const snA = sin(aAngle);
   const rot = vec2(cl.x.mul(csA).sub(cl.y.mul(snA)), cl.x.mul(snA).add(cl.y.mul(csA)));
-  const corner = rot.mul(aScale);
+  const corner = rot.mul(effScale);
   const viewPos = vec4(centerView.xyz.add(vec3(corner, 0.0)), 1.0);
   mat.vertexNode = cameraProjectionMatrix.mul(viewPos);
 
@@ -61,7 +68,9 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   const wob = float(0.80)
     .add(sin(ang.mul(5.0).add(seed)).mul(0.17))
     .add(sin(ang.mul(9.0).sub(seed.mul(1.7))).mul(0.07));
-  mat.opacityNode = float(1.0).sub(smoothstep(wob.sub(0.12), wob, rad));
+  // Softer, more melted feather (toward the reference's fuller gaussian) so dense
+  // dabs blend into continuous painted strokes rather than reading as stamps.
+  mat.opacityNode = float(1.0).sub(smoothstep(wob.sub(0.22), wob, rad));
 
   // Flat painterly volume (NO fake sphere shading — the light is baked into aColor):
   // darken toward the rim, plus a grounding shadow across the lower belly of the stamp.
@@ -72,7 +81,6 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   // Aerial perspective: dissolve FULLY into the cool haze with distance, so distant
   // hills, the streaming frontier, and every stroke all end in atmosphere — never a
   // hard edge. This dense, close haze is what unifies the palette into one painting.
-  const depth = centerView.z.negate();
   const fogF = smoothstep(float(FOG_NEAR), float(FOG_FAR), depth);
   const fogCol = vec3(palette.fog.r, palette.fog.g, palette.fog.b);
   mat.colorNode = mix(aColor.mul(dab), fogCol, fogF);
