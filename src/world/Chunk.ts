@@ -174,11 +174,12 @@ export class Chunk {
           scale = 0.6 + rnd() * rnd() * 1.6; // mostly small grit, the rare bigger stone
           yoff = 0.2 + rnd() * 0.35; // sits low, on the ground
           wind = 0; angle = rnd() * Math.PI; aspect = 0.9 + rnd() * 0.3;
-        } else if (rnd() < 0.04) {
-          // wildflower fleck floating just above the grass — colour punctuation
+        } else if (rnd() < 0.022) {
+          // wildflower fleck floating just above the grass — colour punctuation,
+          // kept SPARSE and mostly white/violet so the meadow doesn't read acid-yellow.
           const f = rnd();
-          if (f < 0.55) cc.copy(palette.flowerWhite);
-          else if (f < 0.85) cc.copy(palette.flowerYellow);
+          if (f < 0.6) cc.copy(palette.flowerWhite);
+          else if (f < 0.78) cc.copy(palette.flowerYellow);
           else cc.copy(palette.flowerViolet);
           scale = 0.5 + rnd() * 0.45; yoff = 0.7 + rnd() * 0.9; wind = 0.5;
         } else {
@@ -188,14 +189,14 @@ export class Chunk {
           const tint = field.tint(x, z) * 0.5 + 0.5;
           // Hue pulled a hair WARMER than the canopy (which is now cooler/deeper) so
           // the meadow and the tree masses separate cleanly in both hue and value.
-          let h = 0.295 - lit * 0.1 + (tint - 0.5) * 0.05;
+          let h = 0.36 - lit * 0.05 + (tint - 0.5) * 0.04; // TRUE rich green (was yellow-lime)
           // LUSH painted meadow (matched to the reference): a saturated verdant
           // carpet with a WIDE value range — bright sunlit lime crowns against deep
           // blue-green shadow pockets — which is what gives the turf its depth and
           // stops it reading as flat pale fuzz over bare ground.
           let s = 0.6 + (1 - lit) * 0.12 + tint * 0.05;
           let l = 0.16 + lit * 0.46 + (rnd() - 0.5) * 0.09;
-          if (field.dry(x, z) > 0.62) { h = 0.2; s = 0.7; l = 0.52 + lit * 0.12; } // bright lime patch
+          if (field.dry(x, z) > 0.62) { h = 0.3; s = 0.5; l = 0.5 + lit * 0.1; } // muted dry green (not acid lime)
           // Deep shade pockets — more of them, and deeper — for the dark/light
           // interplay between clumps that reads as a dense, layered meadow.
           if (rnd() < 0.22) { l *= 0.5; s += 0.08; }
