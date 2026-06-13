@@ -16,6 +16,7 @@ import {
   screenUV,
   screenSize,
 } from 'three/tsl';
+import { uGlow, uImpasto, uChroma, uVignette, uBleed } from '../core/settings';
 
 // Faithful TSL port of 6.html's single post pass `paintFrag` (lines ~805-872).
 // One full-screen pass that turns the rendered frame into a "painting": a
@@ -28,8 +29,9 @@ import {
 // neighbourhood (4 quadrants x a 2x2 tap) is unrolled in JS so each texture
 // fetch has a constant offset, which is the natural shape for TSL.
 
-const GLOW = 0.7; // uGlow in 6.html
-const IMPASTO = 0.5; // uImpasto in 6.html
+// GLOW (0.7) and IMPASTO (0.5) are now LIVE uniforms in src/core/settings.ts
+// (uGlow / uImpasto), so the control panel can drive them at runtime. The
+// grade's chroma (1.14) and vignette (0.28) are likewise uChroma / uVignette.
 
 export function buildPostProcessing(
   renderer: THREE.WebGPURenderer,
@@ -48,6 +50,10 @@ export function buildPostProcessing(
   // `px` is 1/resolution (texel size); offset is in texel units.
   const tap = (px: any, ox: number, oy: number): any =>
     scenePassColor.sample(screenUV.add(px.mul(vec2(ox, oy)))).rgb;
+
+  // Sample at an arbitrary texel-offset VECTOR (a node) — for the flow-aligned smear.
+  const tapv = (px: any, off: any): any =>
+    scenePassColor.sample(screenUV.add(px.mul(off))).rgb;
 
   const paint = Fn(() => {
     // Texel size = 1 / resolution. `screenSize` is a RENDER-updated uniform, so
@@ -93,13 +99,28 @@ export function buildPostProcessing(
 
     const col = mix(raw, bestMean, float(0.45)).toVar();
 
+    // ---- 1.5) OIL-PAINT BLEED: smear colour ALONG the local contour (the isophote,
+    // perpendicular to the luminance gradient) so neighbouring strokes melt and bleed
+    // into one another like wet oil paint. A short symmetric line-blur; strength = uBleed.
+    const bgx = lum(tap(px, 1.5, 0)).sub(lum(tap(px, -1.5, 0)));
+    const bgy = lum(tap(px, 0, 1.5)).sub(lum(tap(px, 0, -1.5)));
+    const blen = bgx.mul(bgx).add(bgy.mul(bgy)).add(1e-5).sqrt();
+    const fdir = vec2(bgy.div(blen), bgx.negate().div(blen)); // isophote ⟂ gradient
+    const smear = col
+      .add(tapv(px, fdir.mul(3.0)))
+      .add(tapv(px, fdir.mul(-3.0)))
+      .add(tapv(px, fdir.mul(6.0)))
+      .add(tapv(px, fdir.mul(-6.0)))
+      .mul(1.0 / 5.0);
+    col.assign(mix(col, smear, uBleed));
+
     // ---- 2) HALATION GLOW: 4 diagonal taps, add glow*glow ----
     const g1 = tap(px, 5, 3);
     const g2 = tap(px, -5, 3);
     const g3 = tap(px, 3, -5);
     const g4 = tap(px, -3, -5);
     const glow = g1.add(g2).add(g3).add(g4).mul(0.25);
-    col.addAssign(glow.mul(glow).mul(0.22 * GLOW));
+    col.addAssign(glow.mul(glow).mul(uGlow.mul(0.22)));
 
     // ---- 3) IMPASTO RELIEF on a canvas grain ----
     // Luminance central differences at 1.5 texels.
@@ -113,7 +134,7 @@ export function buildPostProcessing(
     const fc = screenUV.div(px);
     const canvasGrad = vec2(cos(fc.x.mul(1.55)), cos(fc.y.mul(1.55))).mul(0.01);
 
-    const k = float(IMPASTO);
+    const k = uImpasto;
     const nrm = normalize(
       vec3(grad.mul(2.6).mul(k).add(canvasGrad.mul(k)).negate(), 1.0),
     );
@@ -126,11 +147,11 @@ export function buildPostProcessing(
     // ---- 4) MONET GRADE ----
     col.assign(col.mul(0.93).add(0.055)); // black-lift, no pure blacks
     const l1 = lum(col);
-    col.assign(mix(vec3(l1), col, float(1.14))); // +chroma
+    col.assign(mix(vec3(l1), col, uChroma)); // +chroma
     col.addAssign(vec3(0.05, 0.025, -0.015).mul(l1)); // warm lights
     col.addAssign(vec3(-0.01, 0.0, 0.035).mul(float(1.0).sub(l1))); // cool shadows
     const vg = screenUV.sub(0.5);
-    col.mulAssign(float(1.0).sub(dot(vg, vg).mul(0.28))); // vignette
+    col.mulAssign(float(1.0).sub(dot(vg, vg).mul(uVignette))); // vignette
 
     return vec4(col, 1.0);
   });

@@ -5,11 +5,16 @@ import { World } from './world/World';
 import { FlightController } from './flight/FlightController';
 import { Bird } from './flight/Bird';
 import { Sky } from './render/Sky';
+import { Controls } from './ui/Controls';
 import { WORLD_SEED } from './config';
 
 async function main() {
   const engine = new Engine();
   await engine.init();
+
+  // Live-tuning dev panel (hidden behind the gear button / backtick key). Built
+  // after init so it can reach engine.sun / engine.hemi / engine.scene.fog.
+  new Controls(engine);
 
   const field = new TerrainField(WORLD_SEED);
   const input = new Input();

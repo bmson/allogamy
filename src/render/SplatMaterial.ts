@@ -4,7 +4,7 @@ import {
   cameraProjectionMatrix, positionGeometry, time, sin, cos, fract,
 } from 'three/tsl';
 import { palette } from './palette';
-import { FOG_NEAR, FOG_FAR, WIND_STRENGTH } from '../config';
+import { uFogNear, uFogFar, uWind, uStrokeBias, uSizeFloor, uSizeJitter, uAngleJitter } from '../core/settings';
 
 // Splats are camera-facing instanced quads. Each instance carries a world centre,
 // a world-space size, a baked colour, a sway weight, and an orientation/elongation
@@ -40,7 +40,7 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   // by aWind so grass/leaves sway and dirt/stone/trunks stay put.
   const gust = sin(aCenter.x.mul(0.13).add(aCenter.z.mul(0.1)).add(time.mul(0.9)))
     .add(sin(aCenter.x.mul(0.05).sub(aCenter.z.mul(0.04)).add(time.mul(0.5))).mul(0.5));
-  const amp = aWind.mul(WIND_STRENGTH);
+  const amp = aWind.mul(uWind);
   const wind = vec3(gust.mul(amp), float(0.0), gust.mul(amp).mul(0.5));
 
   // Billboard: place the swayed centre in view space, then build the quad corner —
@@ -52,16 +52,24 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   // keep overlapping into a solid, plush carpet instead of thinning into
   // see-through gaps. The floor scales with depth (≈ constant pixels); near dabs
   // (small depth) keep their authored world size untouched.
-  const effScale = aScale.max(depth.mul(0.003));
-  // Mild default elongation so round dabs read as SHORT STROKES, not dots (6.html's
-  // marks are bristly little strokes). A small additive bias on the length axis:
-  // round dabs (aspect≈1) become ~1.12 — barely elongated, reads as a stroke — while
-  // blades/stems that already set a large aspect change negligibly, so flora/foliage
-  // silhouettes are preserved.
-  const lenAspect = aAspect.add(0.55); // oval, not round → reads as a paint/pencil stroke
+  // Per-stamp pseudo-random values (hashed from the world centre) that break up the
+  // mechanical regularity — each dab gets its OWN size and direction so the field
+  // reads hand-made and organic, not a grid of identical marks.
+  const j1 = fract(sin(aCenter.x.mul(34.21).add(aCenter.z.mul(11.13))).mul(7219.17));
+  const j2 = fract(sin(aCenter.x.mul(73.99).add(aCenter.z.mul(41.07))).mul(3137.51));
+  const sizeJit = float(1.0).add(j1.sub(0.5).mul(2.0).mul(uSizeJitter)); // 1 ± uSizeJitter
+  // Gaussian-splat size FLOOR (distant dabs never shrink below a min apparent size →
+  // a solid, plush carpet), then jittered so dab sizes vary irregularly.
+  const effScale = aScale.max(depth.mul(uSizeFloor)).mul(sizeJit);
+  // Oval, not round, so dabs read as paint/pencil STROKES; large-aspect blades/stems
+  // change negligibly so flora/foliage silhouettes are preserved.
+  const lenAspect = aAspect.add(uStrokeBias);
   const cl = vec2(positionGeometry.x, positionGeometry.y.mul(lenAspect));
-  const csA = cos(aAngle);
-  const snA = sin(aAngle);
+  // Random direction offset per stamp (esp. terrain grass, which is otherwise all
+  // aligned at angle 0) → irregular stroke directions.
+  const jAngle = aAngle.add(j2.sub(0.5).mul(uAngleJitter));
+  const csA = cos(jAngle);
+  const snA = sin(jAngle);
   const rot = vec2(cl.x.mul(csA).sub(cl.y.mul(snA)), cl.x.mul(snA).add(cl.y.mul(csA)));
   const corner = rot.mul(effScale);
   const viewPos = vec4(centerView.xyz.add(vec3(corner, 0.0)), 1.0);
@@ -91,7 +99,7 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   // grey (luminance), then wash toward the pale blue-violet aerial colour, so distant
   // strokes dissolve into luminous airy paper rather than a hard edge or grey soup.
   // The aerial colour matches palette.fog (= the linear value vec3(0.72,0.75,0.89)).
-  const air = smoothstep(float(FOG_NEAR), float(FOG_FAR), depth);
+  const air = smoothstep(uFogNear, uFogFar, depth);
   const fogCol = vec3(palette.fog.r, palette.fog.g, palette.fog.b);
   const lum = aColor.dot(vec3(0.299, 0.587, 0.114));
   const greyed = mix(aColor, vec3(lum, lum, lum), air.mul(0.35));

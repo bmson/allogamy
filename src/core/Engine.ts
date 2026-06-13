@@ -1,7 +1,8 @@
 import * as THREE from 'three/webgpu';
 import { palette } from '../render/palette';
 import { buildPostProcessing } from '../render/post';
-import { FOG_NEAR, FOG_FAR, CAM_FOV, CAM_FAR, SUN_DIR } from '../config';
+import { CAM_FOV, CAM_FAR, SUN_DIR } from '../config';
+import { jsSettings } from './settings';
 
 export interface Updatable {
   update(dt: number, t: number): void;
@@ -32,6 +33,10 @@ export class Engine {
   renderer!: THREE.WebGPURenderer;
   scene!: THREE.Scene;
   camera!: THREE.PerspectiveCamera;
+  // Public so the live-tuning panel (src/ui/Controls.ts) can drive these JS-side
+  // art params directly: light.intensity and scene.fog.near/far.
+  sun!: THREE.DirectionalLight;
+  hemi!: THREE.HemisphereLight;
   private clock = new THREE.Clock();
   private updaters: Updatable[] = [];
   private postFX!: THREE.PostProcessing;
@@ -50,7 +55,10 @@ export class Engine {
 
     const scene = new THREE.Scene();
     scene.background = palette.fog.clone();
-    scene.fog = new THREE.Fog(palette.fog.clone(), FOG_NEAR, FOG_FAR);
+    // Fog near/far seed from the live settings (which themselves seed from the
+    // config consts), so the panel can update scene.fog.near/far in lockstep
+    // with the splat-side fog uniforms (uFogNear/uFogFar).
+    scene.fog = new THREE.Fog(palette.fog.clone(), jsSettings.fogNear, jsSettings.fogFar);
     this.scene = scene;
 
     this.camera = new THREE.PerspectiveCamera(
@@ -62,12 +70,18 @@ export class Engine {
 
     // Warm, low-afternoon light: a softer hemisphere fill (less flat) lets the
     // strong, warm directional key carve form into the lit meshes — golden, not cold.
-    const hemi = new THREE.HemisphereLight(palette.skyZenith.clone(), palette.groundBounce.clone(), 0.62);
+    const hemi = new THREE.HemisphereLight(
+      palette.skyZenith.clone(),
+      palette.groundBounce.clone(),
+      jsSettings.hemiIntensity,
+    );
     scene.add(hemi);
-    const sun = new THREE.DirectionalLight(palette.sun.clone(), 2.6);
+    this.hemi = hemi;
+    const sun = new THREE.DirectionalLight(palette.sun.clone(), jsSettings.sunIntensity);
     sun.position.set(...SUN_DIR).multiplyScalar(120);
     scene.add(sun);
     scene.add(sun.target);
+    this.sun = sun;
 
     // Painterly post: Kuwahara cohesion + halation glow + canvas relief + grade.
     this.postFX = buildPostProcessing(renderer, scene, this.camera).post;

@@ -1,32 +1,60 @@
 import * as THREE from 'three/webgpu';
-import { toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
-// Procedural geometry for the hero pelican. The guiding rule of this module is
-// that NOTHING is a primitive and NOTHING has a straight edge: every form is a
-// smooth surface SWEPT along a curved Catmull-Rom spine, with the cross-section
-// radius easing continuously from station to station. Body, neck and tail are
-// built so their joins are radius-matched and sunk together — at rest they read
-// as ONE sinuous, continuous animal, not a kit of stuck-together parts. The bill
-// down-curves along its own spline; the gular pouch is a soft swollen volume; the
-// wings are single CONTINUOUS cambered airfoil membranes with curved leading and
-// trailing edges (the primary "fingers" are a smoothly-scalloped trailing edge,
-// NOT stacked flat cards); legs and webbed feet are tapering swept tubes with a
-// soft curved web. Colour is baked per-vertex with a gentle broken-colour wash so
-// the surface harmonises with the painterly splat world, then lit by the real
-// scene sun + hemisphere via MeshStandardMaterial.
+// ===========================================================================
+// THE PELICAN — procedural geometry, rebuilt for COHERENCE.
+//
+// The whole bird is now ONE continuous, welded skin. Instead of bolting a dozen
+// independently-capped tubes and membranes together (which left visible normal
+// seams at every joint — body/neck/head/tail each reading as a separate primitive),
+// the body + neck + head + bill + tail are swept as a SINGLE uninterrupted surface
+// along ONE long master spline: rump → belly → breast → up the S-neck → head →
+// down the bill, with the tail and a soft tail-fan grown out of the same surface.
+// There are NO interior caps along that run, so the normal field flows unbroken
+// from nose to tail — the silhouette and shading are continuous by construction.
+//
+// The wings are each ONE cambered membrane whose ROOT is buried inside the body
+// (a shoulder fairing) so there is no hard seam where wing meets back.
+//
+// Articulation without tearing: every vertex of the unified skin is given smooth
+// SKIN WEIGHTS against a small bone chain (tail, body, 4 neck bones, head, jaw,
+// and per-wing shoulder/elbow/wrist/hand). Because weights blend across each
+// joint, bending a bone smoothly drags the shared surface with it — the skin
+// stretches at the joint instead of opening a gap. One SkinnedMesh, one material,
+// one draw call for the whole body; one SkinnedMesh per wing. A genuine single
+// organic form that bends like a supple animal.
+//
+// Stylisation: a smooth, carved, slightly-Ghibli sculpture. Soft confident curves,
+// a clean planar read, gentle baked light + a quiet painterly broken-colour wash
+// so it sits in the pencil/splat world without looking like CAD plastic.
 //
 // Convention (matches Bird.ts): nose +Z, up +Y, wings along ±X.
+// ===========================================================================
 
 // ---------------------------------------------------------------------------
-// Palette — a heron/crane-grey pelican: soft pearl-grey back cooling to slate,
-// near-charcoal primaries with a faint cool sheen, a warm ochre bill. Tuned to
-// sit quietly against the meadow's misty cool greens while the soulful, sculpted
-// form reads cleanly close to the chase camera.
+// Bone indices for the unified body skeleton. Shared between geometry weighting
+// and the animator so they never drift out of sync.
+// ---------------------------------------------------------------------------
+export const BONE = {
+  TAIL: 0,
+  BODY: 1, // the torso anchor (also the skeleton root child the body hangs from)
+  NECK0: 2,
+  NECK1: 3,
+  NECK2: 4,
+  NECK3: 5,
+  HEAD: 6,
+  JAW: 7, // lower mandible
+  COUNT: 8,
+} as const;
+
+// ---------------------------------------------------------------------------
+// Palette — a soft pearl-grey pelican warming to ochre at the bill, cooling to
+// slate beneath. Tuned to sit quietly in the misty meadow.
 // ---------------------------------------------------------------------------
 export const C_BODY_TOP = new THREE.Color('#eef1f3'); // sunlit pearl back
-export const C_BODY = new THREE.Color('#d8dde2'); // body grey
-export const C_BODY_LOW = new THREE.Color('#a9b2bd'); // cool slate underside / soft AO
-export const C_NECK = new THREE.Color('#e7eaec'); // pale nape
+export const C_BODY = new THREE.Color('#dbe0e5'); // body grey
+export const C_BODY_LOW = new THREE.Color('#a7b0bb'); // cool slate underside / soft AO
+export const C_NECK = new THREE.Color('#e9ecee'); // pale nape
 export const C_COVERT = new THREE.Color('#c2c9d1'); // inner wing
 export const C_COVERT_LOW = new THREE.Color('#97a0ac'); // wing underside
 export const C_PRIMARY = new THREE.Color('#2b2f38'); // charcoal flight feathers
@@ -51,39 +79,33 @@ const smoothstep = (a: number, b: number, x: number) => {
   const t = clamp01((x - a) / (b - a));
   return t * t * (3 - 2 * t);
 };
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 // ---------------------------------------------------------------------------
-// Cheap value noise (hash-lattice, trilinear) used to break the geometry off its
-// perfect mathematical surfaces — a few octaves of subtle displacement so the
-// body, head and neck read as a soft-feathered animal rather than a chrome shell.
+// Cheap value noise → a few octaves of subtle displacement so the smooth sweep
+// reads as a soft-feathered animal, never a chrome shell. Tiny amplitudes only.
 // ---------------------------------------------------------------------------
 function hash3(x: number, y: number, z: number): number {
   let h = x * 374761393 + y * 668265263 + z * 1274126177;
   h = (h ^ (h >>> 13)) * 1274126177;
   h = h ^ (h >>> 16);
-  return ((h >>> 0) / 4294967295) * 2 - 1; // -1..1
+  return ((h >>> 0) / 4294967295) * 2 - 1;
 }
 function vnoise(x: number, y: number, z: number): number {
   const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
   const xf = x - xi, yf = y - yi, zf = z - zi;
   const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf), w = zf * zf * (3 - 2 * zf);
-  const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
   const c = (dx: number, dy: number, dz: number) => hash3(xi + dx, yi + dy, zi + dz);
   const x00 = lerp(c(0, 0, 0), c(1, 0, 0), u), x10 = lerp(c(0, 1, 0), c(1, 1, 0), u);
   const x01 = lerp(c(0, 0, 1), c(1, 0, 1), u), x11 = lerp(c(0, 1, 1), c(1, 1, 1), u);
   return lerp(lerp(x00, x10, v), lerp(x01, x11, v), w);
 }
-/** Fractal noise, ~2 octaves, returned in -1..1. */
 function fbm(x: number, y: number, z: number): number {
   return 0.66 * vnoise(x, y, z) + 0.34 * vnoise(x * 2.1 + 11, y * 2.1 + 5, z * 2.1 + 3);
 }
 
-/**
- * Push every vertex along its normal by layered noise so a smooth sweep gains an
- * organic, feathered softness. Tiny amplitudes only — enough to kill the perfect
- * mathematical sheen, never enough to break the silhouette. Recomputes normals.
- */
-export function roughen(geo: THREE.BufferGeometry, amp: number, freq: number, biasDown = 0): THREE.BufferGeometry {
+/** Push every vertex along its normal by layered noise for organic softness. */
+function roughen(geo: THREE.BufferGeometry, amp: number, freq: number, biasDown = 0): THREE.BufferGeometry {
   if (!geo.attributes.normal) geo.computeVertexNormals();
   const pos = geo.attributes.position;
   const nrm = geo.attributes.normal;
@@ -104,8 +126,7 @@ export type PaintFn = (
   nx: number, ny: number, nz: number, bb: THREE.Box3,
 ) => void;
 
-/** Bake a per-vertex colour buffer; normals must already be present & smooth. */
-export function paint(geo: THREE.BufferGeometry, fn: PaintFn): THREE.BufferGeometry {
+function paint(geo: THREE.BufferGeometry, fn: PaintFn): THREE.BufferGeometry {
   if (!geo.attributes.normal) geo.computeVertexNormals();
   geo.computeBoundingBox();
   const bb = geo.boundingBox!;
@@ -122,27 +143,21 @@ export function paint(geo: THREE.BufferGeometry, fn: PaintFn): THREE.BufferGeome
   return geo;
 }
 
-/** Soft directional term so baked colour already carries a hint of the sun. */
 export const sunlit = (nx: number, ny: number, nz: number, amt = 0.12) =>
   1 + amt * Math.max(0, nx * SUN.x + ny * SUN.y + nz * SUN.z);
 
-/**
- * A gentle painterly broken-colour wash, applied to a finished vertex-colour
- * buffer. Each vertex is nudged warm/cool by low-frequency noise so the surface
- * shimmers with subtle temperature variation like a Monet brushstroke — the
- * thing that lets the smooth bird sit in the splat-painted world instead of
- * looking like flat CAD plastic. Kept very subtle so the bird stays elegant.
- */
+// A quiet painterly broken-colour wash so the smooth surface shimmers with
+// subtle temperature variation instead of reading as flat plastic.
 const C_WARM = new THREE.Color('#f3e6cf');
 const C_COOL = new THREE.Color('#8fa0bf');
-export function brokenColour(geo: THREE.BufferGeometry, strength: number, freq: number): THREE.BufferGeometry {
+function brokenColour(geo: THREE.BufferGeometry, strength: number, freq: number): THREE.BufferGeometry {
   const pos = geo.attributes.position;
   const col = geo.attributes.color as THREE.BufferAttribute;
   if (!col) return geo;
   const c = new THREE.Color();
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-    const n = fbm(x * freq, y * freq + 3.1, z * freq + 7.7); // -1..1
+    const n = fbm(x * freq, y * freq + 3.1, z * freq + 7.7);
     c.fromBufferAttribute(col, i);
     if (n > 0) c.lerp(C_WARM, n * strength);
     else c.lerp(C_COOL, -n * strength);
@@ -153,67 +168,112 @@ export function brokenColour(geo: THREE.BufferGeometry, strength: number, freq: 
 }
 
 // ===========================================================================
-// SWEPT SURFACE CORE
-// The single workhorse: sweep a closed elliptical cross-section along a smooth
-// Catmull-Rom spine using parallel-transport frames (no twist flips, no kinks),
-// with the half-width / half-height / centre easing continuously from station to
-// station. This single primitive builds the body, neck, tail, bill, legs and
-// toes — so every form on the bird is, by construction, a smooth curved tube with
-// no straight edges and no hard primitive anywhere.
+// THE MASTER SPINE — ONE continuous centre-line for the entire body.
+//
+// It runs: tail tip (−Z, low) → rump → belly → breast → shoulders → UP the
+// S-curve of the neck → head → forward & down along the bill to the tip. The
+// whole creature is swept along THIS, so by construction it is one flowing form.
+//
+// Each station carries its cross-section profile AND the bone it primarily
+// belongs to, so we can weight the swept vertices smoothly between bones.
 // ===========================================================================
-export interface Profile {
-  rx: number; // half-width  (lateral)
-  ry: number; // half-height (vertical, in the spine's frame)
-  yOff?: number; // pear/teardrop bias: pushes the lower half down (>0 = heavier belly)
-  roll?: number; // optional roll of the section about the spine tangent (radians)
+interface Station {
+  p: THREE.Vector3; // centre point of the ring
+  rx: number; // half-width (lateral)
+  ry: number; // half-height (vertical, in the spine frame)
+  yOff: number; // teardrop bias: pushes the lower half down (heavier belly)
+  bone: number; // primary bone for vertices on this ring
+  blend: number; // 0..1 how much this ring blends toward the NEXT station's bone
+  flatten: number; // 0..1 squash the section toward a flat horizontal lens (bill)
 }
 
-/**
- * Sweep `seg`-point ellipse rings along the spline through `spine` (world-ish
- * points), interpolating `profiles` (one per spine point) across `samples` rings.
- * Returns a watertight, smooth-normalled BufferGeometry. The frame is built by
- * parallel transport so the tube never pinches or twists at a bend — the secret
- * to a continuous, flowing surface through an S-curve.
- */
-export function sweep(
-  spine: THREE.Vector3[],
-  profiles: Profile[],
-  seg: number,
-  samples: number,
-  capStart = true,
-  capEnd = true,
-): THREE.BufferGeometry {
-  const curve = new THREE.CatmullRomCurve3(spine, false, 'catmullrom', 0.5);
-  const pts = curve.getSpacedPoints(samples - 1); // samples points
-  // tangents
+const S = (
+  p: THREE.Vector3, rx: number, ry: number, yOff: number,
+  bone: number, blend = 0, flatten = 0,
+): Station => ({ p, rx, ry, yOff, bone, blend, flatten });
+
+// The body spine. Tuned so the neck folds back in the soaring pelican "S" and the
+// bill droops off the head — all as ONE curve. Radii ease continuously.
+function bodySpine(): Station[] {
+  return [
+    // ---- tail (grows straight out of the rump, low and trailing) ----
+    S(new THREE.Vector3(0, 0.05, -1.28), 0.015, 0.012, 0, BONE.TAIL),
+    S(new THREE.Vector3(0, 0.055, -1.16), 0.05, 0.022, 0, BONE.TAIL, 0.5),
+    S(new THREE.Vector3(0, 0.05, -1.0), 0.075, 0.05, 0.1, BONE.TAIL, 1.0),
+    // ---- body teardrop ----
+    S(new THREE.Vector3(0, 0.03, -0.82), 0.12, 0.12, 0.2, BONE.BODY, 0.0),
+    S(new THREE.Vector3(0, -0.01, -0.5), 0.2, 0.215, 0.4, BONE.BODY),
+    S(new THREE.Vector3(0, -0.02, -0.12), 0.238, 0.262, 0.48, BONE.BODY), // heaviest belly
+    S(new THREE.Vector3(0, 0.0, 0.22), 0.218, 0.238, 0.42, BONE.BODY), // breast
+    S(new THREE.Vector3(0, 0.07, 0.52), 0.15, 0.17, 0.26, BONE.BODY, 0.4),
+    S(new THREE.Vector3(0, 0.16, 0.72), 0.092, 0.102, 0.12, BONE.BODY, 1.0), // shoulder / neck root
+    // ---- S-neck (folds up & back, then forward) ----
+    S(new THREE.Vector3(0, 0.3, 0.74), 0.078, 0.086, 0.06, BONE.NECK0, 0.6),
+    S(new THREE.Vector3(0, 0.44, 0.69), 0.068, 0.076, 0.0, BONE.NECK1, 0.5),
+    S(new THREE.Vector3(0, 0.56, 0.62), 0.062, 0.07, 0.0, BONE.NECK1, 1.0),
+    S(new THREE.Vector3(0, 0.64, 0.62), 0.06, 0.068, 0.0, BONE.NECK2, 0.6),
+    S(new THREE.Vector3(0, 0.69, 0.69), 0.058, 0.066, 0.0, BONE.NECK3, 0.6),
+    S(new THREE.Vector3(0, 0.71, 0.8), 0.058, 0.064, 0.0, BONE.NECK3, 1.0), // nape into head
+    // ---- head ----
+    S(new THREE.Vector3(0, 0.71, 0.9), 0.082, 0.09, 0.0, BONE.HEAD, 0.3),
+    S(new THREE.Vector3(0, 0.7, 0.99), 0.095, 0.1, 0.0, BONE.HEAD), // crown
+    S(new THREE.Vector3(0, 0.675, 1.07), 0.082, 0.085, 0.0, BONE.HEAD),
+    S(new THREE.Vector3(0, 0.645, 1.13), 0.055, 0.05, 0.0, BONE.HEAD, 0.0), // lores → bill base
+    // ---- bill (droops, flattens to a broad lens, tip hooks down) ----
+    S(new THREE.Vector3(0, 0.628, 1.2), 0.05, 0.034, 0.0, BONE.HEAD, 0.4, 0.45),
+    S(new THREE.Vector3(0, 0.6, 1.34), 0.044, 0.024, 0.0, BONE.HEAD, 1.0, 0.7),
+    S(new THREE.Vector3(0, 0.566, 1.48), 0.034, 0.018, 0.0, BONE.HEAD, 1.0, 0.8),
+    S(new THREE.Vector3(0, 0.527, 1.6), 0.02, 0.014, 0.0, BONE.HEAD, 1.0, 0.85),
+    S(new THREE.Vector3(0, 0.5, 1.66), 0.008, 0.012, 0.0, BONE.HEAD, 1.0, 0.6), // hooked nail
+  ];
+}
+
+// ===========================================================================
+// SWEEP the master spine into ONE skin, computing skin weights per ring.
+//
+// Returns geometry with position/normal/color AND skinIndex/skinWeight, ready
+// to be a SkinnedMesh. Parallel-transport frames keep the tube from twisting
+// through the vertical S-bend — the secret to a continuous surface.
+// ===========================================================================
+const SEG = 28; // radial segments around the body (clean, smooth ring)
+
+interface SweptSkin {
+  geo: THREE.BufferGeometry;
+  // local-space anchor of each bone (its rest head position) so Bird can place bones
+  boneRest: THREE.Vector3[];
+}
+
+function sweepBodySkin(stations: Station[]): SweptSkin {
+  const n = stations.length;
+  const pts = stations.map((s) => s.p);
+  const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.5);
+
+  // Sample one ring per station (use the station points directly so profiles &
+  // bone tags line up exactly with the geometry). Tangents from the curve.
   const tan: THREE.Vector3[] = [];
-  for (let i = 0; i < samples; i++) {
-    const t = i / (samples - 1);
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
     tan.push(curve.getTangentAt(clamp01(t)).normalize());
   }
-  // parallel-transport frames: start with a reference up, rotate it minimally to
-  // stay perpendicular to each successive tangent. This avoids the wild twisting
-  // a naive cross-product frame gives through a near-vertical S-bend.
+  // parallel-transport frames
   const normals: THREE.Vector3[] = [];
   const binormals: THREE.Vector3[] = [];
   let nrm = new THREE.Vector3(0, 1, 0);
-  // seed: make the first normal perpendicular to the first tangent
   if (Math.abs(tan[0].dot(nrm)) > 0.92) nrm.set(1, 0, 0);
   nrm.sub(tan[0].clone().multiplyScalar(tan[0].dot(nrm))).normalize();
   const q = new THREE.Quaternion();
   const axis = new THREE.Vector3();
-  for (let i = 0; i < samples; i++) {
+  for (let i = 0; i < n; i++) {
     if (i > 0) {
       axis.crossVectors(tan[i - 1], tan[i]);
       const len = axis.length();
       if (len > 1e-6) {
         axis.divideScalar(len);
-        const dot = tan[i - 1].dot(tan[i]);
-        const ang = Math.acos(dot < -1 ? -1 : dot > 1 ? 1 : dot);
+        const dot = clamp01((tan[i - 1].dot(tan[i]) + 1) / 2) * 2 - 1;
+        const ang = Math.acos(dot);
         q.setFromAxisAngle(axis, ang);
         nrm.applyQuaternion(q);
       }
-      // re-orthogonalise against drift
       nrm.sub(tan[i].clone().multiplyScalar(tan[i].dot(nrm))).normalize();
     }
     const bin = new THREE.Vector3().crossVectors(tan[i], nrm).normalize();
@@ -221,42 +281,145 @@ export function sweep(
     binormals.push(bin);
   }
 
-  // resample the profile array across the ring samples
-  const prof = (i: number): Profile => {
-    const f = (i / (samples - 1)) * (profiles.length - 1);
-    const a = Math.floor(f), b = Math.min(profiles.length - 1, a + 1), k = f - a;
-    const pa = profiles[a], pb = profiles[b];
-    return {
-      rx: pa.rx + (pb.rx - pa.rx) * k,
-      ry: pa.ry + (pb.ry - pa.ry) * k,
-      yOff: (pa.yOff ?? 0) + ((pb.yOff ?? 0) - (pa.yOff ?? 0)) * k,
-      roll: (pa.roll ?? 0) + ((pb.roll ?? 0) - (pa.roll ?? 0)) * k,
-    };
-  };
-
   const verts: number[] = [];
-  for (let i = 0; i < samples; i++) {
+  const skinIdx: number[] = [];
+  const skinWgt: number[] = [];
+
+  for (let i = 0; i < n; i++) {
+    const st = stations[i];
     const c = pts[i], nA = normals[i], bA = binormals[i];
-    const p = prof(i);
-    const cr = Math.cos(p.roll ?? 0), sr = Math.sin(p.roll ?? 0);
-    for (let s = 0; s < seg; s++) {
-      const a = (s / seg) * Math.PI * 2;
+    // bone weighting: this ring belongs to `bone`, blending toward the next
+    // station's bone by `blend` so the skin straddles each joint smoothly.
+    const boneA = st.bone;
+    const boneB = i < n - 1 ? stations[i + 1].bone : st.bone;
+    const wB = boneA === boneB ? 0 : st.blend;
+    for (let s = 0; s < SEG; s++) {
+      const a = (s / SEG) * Math.PI * 2;
       let ex = Math.cos(a), ey = Math.sin(a);
-      // pear/teardrop: drop the lower half a touch for belly weight
-      const yb = ey < 0 ? ey * (1 + (p.yOff ?? 0)) : ey;
-      // local roll of the section
-      const lx = ex * cr - yb * sr;
-      const ly = ex * sr + yb * cr;
-      const ux = lx * p.rx, uy = ly * p.ry;
+      const yb = ey < 0 ? ey * (1 + st.yOff) : ey;
+      // flatten toward a broad horizontal lens for the bill (wide & shallow)
+      const fx = ex * lerp(1, 1.35, st.flatten);
+      const fy = yb * lerp(1, 0.5, st.flatten);
+      const ux = fx * st.rx, uy = fy * st.ry;
       verts.push(
         c.x + bA.x * ux + nA.x * uy,
         c.y + bA.y * ux + nA.y * uy,
         c.z + bA.z * ux + nA.z * uy,
       );
+      skinIdx.push(boneA, boneB, 0, 0);
+      skinWgt.push(1 - wB, wB, 0, 0);
+    }
+  }
+
+  // index the tube + cap the two true ends (tail tip & bill tip) only
+  const idx: number[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    const a = i * SEG, b = (i + 1) * SEG;
+    for (let s = 0; s < SEG; s++) {
+      const j = (s + 1) % SEG;
+      idx.push(a + s, a + j, b + j);
+      idx.push(a + s, b + j, b + s);
+    }
+  }
+  // cap start (tail tip)
+  {
+    const ci = verts.length / 3;
+    verts.push(pts[0].x, pts[0].y, pts[0].z);
+    skinIdx.push(stations[0].bone, 0, 0, 0); skinWgt.push(1, 0, 0, 0);
+    for (let s = 0; s < SEG; s++) idx.push(ci, ((s + 1) % SEG), s);
+  }
+  // cap end (bill tip)
+  {
+    const base = (n - 1) * SEG;
+    const ci = verts.length / 3;
+    const e = pts[n - 1];
+    verts.push(e.x, e.y, e.z);
+    skinIdx.push(stations[n - 1].bone, 0, 0, 0); skinWgt.push(1, 0, 0, 0);
+    for (let s = 0; s < SEG; s++) idx.push(ci, base + s, base + ((s + 1) % SEG));
+  }
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+  g.setAttribute('skinIndex', new THREE.BufferAttribute(new Uint16Array(skinIdx), 4));
+  g.setAttribute('skinWeight', new THREE.BufferAttribute(new Float32Array(skinWgt), 4));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+
+  // Bone rest anchors = each bone's PIVOT point. These only set where a bone
+  // rotates/scales from (the rest inverse cancels the offset for the undeformed
+  // skin), so we choose anatomically sensible pivots rather than the first tagged
+  // ring: torso pivots at the belly centre, tail at the rump (so it swings like a
+  // rudder from the body, not from its own tip), neck/head/jaw at their joints.
+  const boneRest: THREE.Vector3[] = new Array(BONE.COUNT);
+  boneRest[BONE.TAIL] = new THREE.Vector3(0, 0.04, -0.92); // rump joint
+  boneRest[BONE.BODY] = new THREE.Vector3(0, -0.02, -0.12); // belly centre
+  boneRest[BONE.NECK0] = new THREE.Vector3(0, 0.18, 0.73); // shoulder/neck root
+  boneRest[BONE.NECK1] = new THREE.Vector3(0, 0.42, 0.7);
+  boneRest[BONE.NECK2] = new THREE.Vector3(0, 0.6, 0.62);
+  boneRest[BONE.NECK3] = new THREE.Vector3(0, 0.69, 0.69);
+  boneRest[BONE.HEAD] = new THREE.Vector3(0, 0.71, 0.86); // nape/head joint
+  boneRest[BONE.JAW] = new THREE.Vector3(0, 0.6, 1.16); // bill base (mandible pivot)
+  for (let b = 0; b < BONE.COUNT; b++) if (!boneRest[b]) boneRest[b] = new THREE.Vector3();
+
+  return { geo: g, boneRest };
+}
+
+// ===========================================================================
+// THE LOWER MANDIBLE + GULAR POUCH — a small separate skin weighted entirely to
+// the JAW bone, faired up under the upper bill so it reads as part of the head.
+// (Kept as a sub-skin of the SAME body mesh via merge, sharing the skeleton, so
+// it is still one draw call and one material — it just answers to the jaw bone.)
+// ===========================================================================
+function buildLowerJawSkin(): { geo: THREE.BufferGeometry } {
+  // a down-curved trough that hangs under the bill: swept like the upper bill but
+  // shorter, with a soft swollen pouch volume in the middle (the gular sac).
+  const base = new THREE.Vector3(0, 0.6, 1.16);
+  const N = 12;
+  const len = 0.46;
+  const pts: THREE.Vector3[] = [];
+  const profs: { rx: number; ry: number; sag: number }[] = [];
+  for (let i = 0; i < N; i++) {
+    const t = i / (N - 1);
+    const z = base.z + t * len;
+    const env = Math.sin(Math.PI * clamp01(t * 1.02)); // pouch bulge envelope
+    const droop = -0.05 - 0.14 * t * t - 0.055 * env;
+    pts.push(new THREE.Vector3(0, base.y + droop, z));
+    profs.push({
+      rx: 0.018 + 0.05 * env,
+      ry: 0.01 + 0.044 * env,
+      sag: 0.6 * env,
+    });
+  }
+  const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.5);
+  const tan: THREE.Vector3[] = [];
+  for (let i = 0; i < N; i++) tan.push(curve.getTangentAt(clamp01(i / (N - 1))).normalize());
+  // simple frames (this short arc barely twists)
+  const verts: number[] = [];
+  const skinIdx: number[] = [];
+  const skinWgt: number[] = [];
+  const seg = 18;
+  for (let i = 0; i < N; i++) {
+    const c = pts[i];
+    const tg = tan[i];
+    const nA = new THREE.Vector3(0, 1, 0).sub(tg.clone().multiplyScalar(tg.dot(new THREE.Vector3(0, 1, 0)))).normalize();
+    const bA = new THREE.Vector3().crossVectors(tg, nA).normalize();
+    const p = profs[i];
+    for (let s = 0; s < seg; s++) {
+      const a = (s / seg) * Math.PI * 2;
+      const ex = Math.cos(a), ey = Math.sin(a);
+      const yb = ey < 0 ? ey * (1 + p.sag) : ey; // sag the underside
+      const ux = ex * p.rx, uy = yb * p.ry;
+      verts.push(
+        c.x + bA.x * ux + nA.x * uy,
+        c.y + bA.y * ux + nA.y * uy,
+        c.z + bA.z * ux + nA.z * uy,
+      );
+      skinIdx.push(BONE.JAW, 0, 0, 0);
+      skinWgt.push(1, 0, 0, 0);
     }
   }
   const idx: number[] = [];
-  for (let i = 0; i < samples - 1; i++) {
+  for (let i = 0; i < N - 1; i++) {
     const a = i * seg, b = (i + 1) * seg;
     for (let s = 0; s < seg; s++) {
       const j = (s + 1) % seg;
@@ -264,310 +427,102 @@ export function sweep(
       idx.push(a + s, b + j, b + s);
     }
   }
-  if (capStart) {
+  // cap both ends
+  for (const [end, atStart] of [[0, true], [N - 1, false]] as [number, boolean][]) {
     const ci = verts.length / 3;
-    verts.push(pts[0].x, pts[0].y, pts[0].z);
-    for (let s = 0; s < seg; s++) idx.push(ci, ((s + 1) % seg), s);
-  }
-  if (capEnd) {
-    const base = (samples - 1) * seg;
-    const ci = verts.length / 3;
-    const e = pts[samples - 1];
-    verts.push(e.x, e.y, e.z);
-    for (let s = 0; s < seg; s++) idx.push(ci, base + s, base + ((s + 1) % seg));
+    verts.push(pts[end].x, pts[end].y, pts[end].z);
+    skinIdx.push(BONE.JAW, 0, 0, 0); skinWgt.push(1, 0, 0, 0);
+    const baseRing = end * seg;
+    for (let s = 0; s < seg; s++) {
+      if (atStart) idx.push(ci, ((s + 1) % seg), s);
+      else idx.push(ci, baseRing + s, baseRing + ((s + 1) % seg));
+    }
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+  g.setAttribute('skinIndex', new THREE.BufferAttribute(new Uint16Array(skinIdx), 4));
+  g.setAttribute('skinWeight', new THREE.BufferAttribute(new Float32Array(skinWgt), 4));
   g.setIndex(idx);
   g.computeVertexNormals();
-  return g;
+  return { geo: g };
 }
 
 // ===========================================================================
-// BODY — one continuous swept teardrop. The spine arcs gently (rump dips, breast
-// rises toward the shoulders) so the body is already a curve, never a straight
-// barrel. Cross-section eases slim rump → heavy breast/belly → narrowing toward
-// the neck join, where the radius is matched to the neck base so the seam reads
-// continuous once articulated.
+// THE TAIL FAN — a soft cambered membrane that grows out of the rump, weighted to
+// the TAIL bone so it steers and follows through with the rump. Faired into the
+// body run (its leading edge tucks inside the rump rings) so no hard seam shows.
 // ===========================================================================
-export function buildBody(): THREE.BufferGeometry {
-  // spine from tail-root (−Z) forward to the shoulder/neck join (+Z), curving up
-  const spine = [
-    new THREE.Vector3(0, 0.02, -0.96),
-    new THREE.Vector3(0, 0.0, -0.7),
-    new THREE.Vector3(0, -0.02, -0.4),
-    new THREE.Vector3(0, -0.02, -0.05),
-    new THREE.Vector3(0, 0.0, 0.3),
-    new THREE.Vector3(0, 0.06, 0.58),
-    new THREE.Vector3(0, 0.12, 0.78), // rises into the shoulders
-  ];
-  const profiles: Profile[] = [
-    { rx: 0.02, ry: 0.02 }, // tail root
-    { rx: 0.12, ry: 0.115, yOff: 0.18 },
-    { rx: 0.2, ry: 0.215, yOff: 0.38 },
-    { rx: 0.235, ry: 0.255, yOff: 0.46 }, // heaviest belly
-    { rx: 0.215, ry: 0.235, yOff: 0.4 }, // breast
-    { rx: 0.145, ry: 0.165, yOff: 0.24 },
-    { rx: 0.082, ry: 0.092, yOff: 0.1 }, // neck join (matches buildNeck base)
-  ];
-  const g = sweep(spine, profiles, 40, 30, true, true);
-  roughen(g, 0.013, 9, 0.55);
-  paint(g, (c, _x, y, _z, nx, ny, nz, bb) => {
-    const top = (y - bb.min.y) / Math.max(1e-3, bb.max.y - bb.min.y);
-    c.copy(C_BODY_LOW).lerp(C_BODY, smoothstep(0.18, 0.55, top))
-      .lerp(C_BODY_TOP, smoothstep(0.6, 1.0, top) * 0.85);
-    // soft ambient occlusion gathering under the belly
-    c.multiplyScalar(0.9 + 0.1 * smoothstep(0.1, 0.5, top));
-    c.multiplyScalar(sunlit(nx, ny, nz, 0.14));
-  });
-  return brokenColour(g, 0.05, 7);
-}
-
-// ===========================================================================
-// NECK — built as ONE continuous swept S-curve (the retracted soaring pelican
-// neck), then sliced internally onto four bones by Bird so a travelling wave can
-// animate it. Here we just build the resting S as a single smooth surface; Bird
-// splits the SAME spine into segment meshes that line up seamlessly. We expose
-// the resting spine so Bird can rebuild matching segment surfaces and place its
-// joint pivots exactly on the curve — no seams, no separate "neck bricks".
-// ===========================================================================
-export const NECK_SPINE: THREE.Vector3[] = [
-  new THREE.Vector3(0, 0.1, 0.0), // base, on the shoulders
-  new THREE.Vector3(0, 0.26, 0.04),
-  new THREE.Vector3(0, 0.4, -0.02), // folds back (the S)
-  new THREE.Vector3(0, 0.5, -0.14),
-  new THREE.Vector3(0, 0.55, -0.1),
-  new THREE.Vector3(0, 0.58, 0.04), // sweeps forward again
-  new THREE.Vector3(0, 0.6, 0.18), // head join, looking forward
-];
-export const NECK_PROFILES: Profile[] = [
-  { rx: 0.082, ry: 0.09, yOff: 0.08 }, // matches body neck-join
-  { rx: 0.07, ry: 0.078 },
-  { rx: 0.062, ry: 0.07 },
-  { rx: 0.058, ry: 0.066 },
-  { rx: 0.056, ry: 0.064 },
-  { rx: 0.052, ry: 0.06 },
-  { rx: 0.05, ry: 0.058 }, // head join
-];
-
-/**
- * Build ONE neck segment as a swept sub-arc of the master S-spine, in the LOCAL
- * frame of its bone (so Bird can hinge it). `t0..t1` is the fraction of the spine
- * this segment covers; the segment is built starting at the origin pointing along
- * its own initial tangent, so consecutive bones, hinged at the resting angles,
- * reconstruct the exact continuous S — but can now flex. Overlapping a hair at
- * the joints keeps the surface watertight to the eye.
- */
-export function buildNeckSegment(t0: number, t1: number): THREE.BufferGeometry {
-  const curve = new THREE.CatmullRomCurve3(NECK_SPINE, false, 'catmullrom', 0.5);
-  const N = 8;
-  const pts: THREE.Vector3[] = [];
-  const profs: Profile[] = [];
-  const origin = curve.getPointAt(t0).clone();
-  // local frame: align the segment's start tangent to +Y-ish but we keep it in the
-  // bone's own space by translating to origin (Bird sets the bone's rotation).
-  for (let i = 0; i < N; i++) {
-    const t = t0 + (t1 - t0) * (i / (N - 1));
-    pts.push(curve.getPointAt(clamp01(t)).clone().sub(origin));
-    // sample profile along the master profile list
-    const f = clamp01(t) * (NECK_PROFILES.length - 1);
-    const a = Math.floor(f), b = Math.min(NECK_PROFILES.length - 1, a + 1), k = f - a;
-    profs.push({
-      rx: NECK_PROFILES[a].rx + (NECK_PROFILES[b].rx - NECK_PROFILES[a].rx) * k,
-      ry: NECK_PROFILES[a].ry + (NECK_PROFILES[b].ry - NECK_PROFILES[a].ry) * k,
-      yOff: (NECK_PROFILES[a].yOff ?? 0) + ((NECK_PROFILES[b].yOff ?? 0) - (NECK_PROFILES[a].yOff ?? 0)) * k,
-    });
-  }
-  const g = sweep(pts, profs, 22, N, true, true);
-  roughen(g, 0.005, 16);
-  paint(g, (c, _x, _y, _z, nx, ny, nz) => {
-    c.copy(C_NECK).multiplyScalar(sunlit(nx, ny, nz, 0.12) * 0.99);
-  });
-  return brokenColour(g, 0.04, 9);
-}
-
-// ===========================================================================
-// HEAD — a smooth swept ovoid that tapers down the lores into the bill base, so
-// the head→bill transition is continuous (no socketed prism). Dusky crown smudge.
-// ===========================================================================
-export function buildHead(): THREE.BufferGeometry {
-  const spine = [
-    new THREE.Vector3(0, 0.0, -0.07),
-    new THREE.Vector3(0, 0.012, -0.02),
-    new THREE.Vector3(0, 0.016, 0.04),
-    new THREE.Vector3(0, 0.008, 0.1),
-    new THREE.Vector3(0, -0.006, 0.16),
-    new THREE.Vector3(0, -0.016, 0.21), // tapers to the bill base
-  ];
-  const profiles: Profile[] = [
-    { rx: 0.025, ry: 0.025 },
-    { rx: 0.082, ry: 0.088 },
-    { rx: 0.096, ry: 0.1 },
-    { rx: 0.086, ry: 0.09 },
-    { rx: 0.056, ry: 0.054 },
-    { rx: 0.034, ry: 0.03 },
-  ];
-  const g = sweep(spine, profiles, 26, 16, true, false);
-  roughen(g, 0.0035, 22);
-  return paint(g, (c, _x, y, z, nx, ny, nz, bb) => {
-    const top = (y - bb.min.y) / Math.max(1e-3, bb.max.y - bb.min.y);
-    const crown = smoothstep(0.55, 0.95, top) * smoothstep(0.18, -0.02, z);
-    c.copy(C_FACE).lerp(C_CROWN, crown * 0.8);
-    c.multiplyScalar(sunlit(nx, ny, nz, 0.12));
-  });
-}
-
-// ===========================================================================
-// BILL — a long, gently DOWN-CURVED sweep. The spine itself droops (quadratic),
-// so the down-curve is real curvature of the centre-line, not a fake offset on a
-// straight prism. Cross-section eases from a broad, flatish base to a slim tip
-// with a subtle culmen ridge. Built for the upper or lower mandible.
-// ===========================================================================
-export function buildBill(len: number, upper: boolean): THREE.BufferGeometry {
-  const N = 9;
-  const spine: THREE.Vector3[] = [];
-  for (let i = 0; i < N; i++) {
-    const t = i / (N - 1);
-    const z = t * len;
-    const droop = -0.16 * t * t * len * 0.5; // curved centre-line
-    spine.push(new THREE.Vector3(0, droop, z));
-  }
-  const profiles: Profile[] = [];
-  for (let i = 0; i < N; i++) {
-    const t = i / (N - 1);
-    const w = (upper ? 0.072 : 0.062) * (1 - 0.78 * t) + 0.006;
-    const h = (upper ? 0.05 : 0.03) * (1 - 0.82 * t) + 0.004;
-    profiles.push({ rx: w, ry: h });
-  }
-  const g = sweep(spine, profiles, 16, N, true, true);
-  roughen(g, 0.0015, 30);
-  return paint(g, (c, x, y, z, nx, ny, nz, bb) => {
-    const f = (z - bb.min.z) / Math.max(1e-3, bb.max.z - bb.min.z);
-    const top = (y - bb.min.y) / Math.max(1e-3, bb.max.y - bb.min.y);
-    c.copy(C_BILL).lerp(C_BILL_TIP, f * 0.9);
-    if (top > 0.7) c.lerp(C_BILL_RIDGE, (top - 0.7) / 0.3 * 0.5); // culmen ridge
-    if (upper) {
-      const groove = smoothstep(0.06, 0.0, Math.abs(Math.abs(x) - 0.022))
-        * smoothstep(0.05, 0.12, f) * smoothstep(0.34, 0.2, f) * (top > 0.55 ? 1 : 0);
-      c.lerp(C_BILL_RIDGE.clone().multiplyScalar(0.55), groove * 0.8);
-    }
-    if (f > 0.9) c.lerp(C_BILL_TIP.clone().multiplyScalar(0.7), (f - 0.9) / 0.1 * 0.7); // hooked nail
-    c.multiplyScalar(sunlit(nx, ny, nz, 0.16) * (top < 0.25 ? 0.9 : 1.0));
-  });
-}
-
-// ===========================================================================
-// GULAR POUCH — the signature pelican throat sac: a soft swollen volume slung
-// under the lower mandible, swept along the bill's down-curve and bulging
-// downward in the middle. A fleshy curved counterpoint to the bill, no prism.
-// ===========================================================================
-export function buildGular(len: number, sag: number): THREE.BufferGeometry {
-  const N = 12;
-  const spine: THREE.Vector3[] = [];
-  for (let i = 0; i < N; i++) {
-    const t = i / (N - 1);
-    const z = t * len;
-    const env = Math.sin(Math.PI * clamp01(t * 1.05));
-    const droop = -0.16 * t * t * len * 0.5 - sag * env; // follows the bill + sags
-    spine.push(new THREE.Vector3(0, droop - 0.01, z));
-  }
-  const profiles: Profile[] = [];
-  for (let i = 0; i < N; i++) {
-    const t = i / (N - 1);
-    const env = Math.sin(Math.PI * clamp01(t * 1.05));
-    profiles.push({ rx: 0.012 + 0.062 * env, ry: 0.01 + 0.05 * env, yOff: 0.5 * env });
-  }
-  const g = sweep(spine, profiles, 16, N, true, true);
-  roughen(g, 0.003, 24);
-  return paint(g, (c, _x, y, _z, nx, ny, nz) => {
-    c.copy(C_BILL).lerp(C_BILL_TIP, 0.2);
-    c.multiplyScalar((y < -0.03 ? 1.05 : 0.92) * sunlit(nx, ny, nz, 0.12));
-  });
-}
-
-// ===========================================================================
-// TAIL — a single smooth swept fan-wedge whose trailing edge is gently scalloped
-// (a soft cosine ripple across the span) so it suggests rectrices WITHOUT being a
-// stack of flat cards. Wide, thin, tapering; central feathers longest.
-// ===========================================================================
-export function buildTail(len: number, halfSpan: number): THREE.BufferGeometry {
-  // Build directly as a cambered membrane: a grid (span × chord) with a curved
-  // leading & trailing edge and a thin solid thickness, then smooth normals.
-  const NSPAN = 17, NCHORD = 5;
-  const top: number[] = [];
-  const bot: number[] = [];
+// The tail reads as a FAN OF RECTRICES: a wide, thin membrane whose trailing edge
+// is cut into ~7 distinct feather lobes by a strong cosine ripple, each feather
+// dropping a little so the fan overlaps like real tail feathers. Central feathers
+// are longest. The leading edge sinks inside the rump rings so there's no seam.
+const TAIL_FEATHERS = 7;
+function buildTailFanSkin(): THREE.BufferGeometry {
+  const NSPAN = TAIL_FEATHERS * 4 + 1, NCHORD = 6;
+  const halfSpan = 0.26, len = 0.62;
+  const top: number[] = [], bot: number[] = [];
+  const rootZ = -0.96; // tucks inside the rump rings
   for (let i = 0; i < NSPAN; i++) {
     const u = (i / (NSPAN - 1)) * 2 - 1; // -1..1 across the span
     const x = u * halfSpan;
-    // central feathers longest, soft rounded fan; scalloped trailing edge
-    const reach = len * (1 - 0.32 * u * u) * (1 + 0.04 * Math.cos(u * Math.PI * 6));
-    const lift = 0.02 + 0.03 * Math.abs(u); // outer edges lift a touch (dihedral)
+    // feather lobes: each rectrix reaches its own length; deep notches between them
+    const lobe = Math.cos(u * Math.PI * TAIL_FEATHERS); // ripple across the fan
+    const notch = 0.16 * (0.5 - 0.5 * lobe); // pull the trailing edge back at notches
+    const reach = len * (1 - 0.34 * u * u) - len * notch;
+    const lift = 0.025 + 0.04 * Math.abs(u); // outer feathers lift (dihedral)
+    // alternate feathers ride slightly above/below for an overlapped read
+    const stagger = 0.012 * Math.sin(u * Math.PI * TAIL_FEATHERS);
     for (let j = 0; j < NCHORD; j++) {
-      const v = j / (NCHORD - 1); // 0 root → 1 trailing tip
-      const z = -reach * v;
-      const th = (0.02 * (1 - v) + 0.003) * (1 - 0.4 * Math.abs(u)); // thins to the edge
-      const y = lift * v * v;
+      const v = j / (NCHORD - 1);
+      const z = rootZ - reach * v;
+      const th = (0.016 * (1 - v) + 0.0022) * (1 - 0.35 * Math.abs(u));
+      const y = 0.05 + lift * v * v + stagger * v;
       top.push(x, y + th, z);
       bot.push(x, y - th, z);
     }
   }
-  return membraneFromGrids(top, bot, NSPAN, NCHORD, (c, _x, _y, z, nx, ny, nz, bb) => {
-    const f = (bb.max.z - z) / Math.max(1e-3, bb.max.z - bb.min.z);
-    c.copy(C_COVERT).lerp(C_PRIMARY, smoothstep(0.45, 1.0, f) * 0.8);
-    c.lerp(C_FEATHER_SHADE, smoothstep(0.0, 0.3, 1 - f) * 0.18);
-    c.multiplyScalar(sunlit(nx, ny, nz, 0.12));
-  });
+  const g = membraneFromGrids(top, bot, NSPAN, NCHORD);
+  applyConstantSkin(g, BONE.TAIL);
+  return g;
 }
 
 // ===========================================================================
-// MEMBRANE — a continuous double-sided cambered surface from a top grid and a
-// bottom grid (same indexing, NSPAN×NCHORD). Seams the rims so it's watertight,
-// smooth-normalled, and reads as one flowing skin. This is the basis for the
-// tail and the wing — NO flat cards, NO straight chords (the caller curves the
-// edges), one draw surface per wing.
+// MEMBRANE — a continuous double-sided cambered surface from a top + bottom grid.
+// Watertight, smooth-normalled, one flowing skin. Basis for tail-fan and wings.
 // ===========================================================================
 function membraneFromGrids(
-  top: number[], bot: number[], NSPAN: number, NCHORD: number, fn: PaintFn, flip = false,
+  top: number[], bot: number[], NSPAN: number, NCHORD: number, flip = false,
 ): THREE.BufferGeometry {
   const nTop = top.length / 3;
   const verts = top.concat(bot);
   const idx: number[] = [];
-  const at = (i: number, j: number) => i * NCHORD + j; // top index
-  const ab = (i: number, j: number) => nTop + i * NCHORD + j; // bottom index
-  // push a triangle, flipping winding when the i-axis is mirrored (left wing) so
-  // the closed shell's front faces always point outward for single-sided shading.
+  const at = (i: number, j: number) => i * NCHORD + j;
+  const ab = (i: number, j: number) => nTop + i * NCHORD + j;
   const tri = (a: number, b: number, c: number) => {
     if (flip) idx.push(a, c, b); else idx.push(a, b, c);
   };
-  // top sheet
   for (let i = 0; i < NSPAN - 1; i++) {
     for (let j = 0; j < NCHORD - 1; j++) {
       tri(at(i, j), at(i, j + 1), at(i + 1, j + 1));
       tri(at(i, j), at(i + 1, j + 1), at(i + 1, j));
     }
   }
-  // bottom sheet (reversed winding)
   for (let i = 0; i < NSPAN - 1; i++) {
     for (let j = 0; j < NCHORD - 1; j++) {
       tri(ab(i, j), ab(i + 1, j + 1), ab(i, j + 1));
       tri(ab(i, j), ab(i + 1, j), ab(i + 1, j + 1));
     }
   }
-  // seam the leading edge (j=0), trailing edge (j=NCHORD-1) and both wingtips
   for (let i = 0; i < NSPAN - 1; i++) {
-    // leading edge
     tri(at(i, 0), ab(i, 0), ab(i + 1, 0));
     tri(at(i, 0), ab(i + 1, 0), at(i + 1, 0));
-    // trailing edge
     const j = NCHORD - 1;
     tri(at(i, j), at(i + 1, j), ab(i + 1, j));
     tri(at(i, j), ab(i + 1, j), ab(i, j));
   }
   for (let j = 0; j < NCHORD - 1; j++) {
-    // root tip (i=0)
     tri(at(0, j), at(0, j + 1), ab(0, j + 1));
     tri(at(0, j), ab(0, j + 1), ab(0, j));
-    // outer tip (i=NSPAN-1)
     const i = NSPAN - 1;
     tri(at(i, j), ab(i, j + 1), at(i, j + 1));
     tri(at(i, j), ab(i, j), ab(i, j + 1));
@@ -576,144 +531,294 @@ function membraneFromGrids(
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
   g.setIndex(idx);
   g.computeVertexNormals();
-  return paint(g, fn);
+  return g;
+}
+
+/** Weight every vertex of a geometry entirely to a single bone. */
+function applyConstantSkin(g: THREE.BufferGeometry, bone: number) {
+  const n = g.attributes.position.count;
+  const idx = new Uint16Array(n * 4);
+  const wgt = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) { idx[i * 4] = bone; wgt[i * 4] = 1; }
+  g.setAttribute('skinIndex', new THREE.BufferAttribute(idx, 4));
+  g.setAttribute('skinWeight', new THREE.BufferAttribute(wgt, 4));
 }
 
 // ===========================================================================
-// WING — ONE continuous cambered airfoil membrane per wing, root at x=0 reaching
-// out along side·X. The whole thing is a single flowing skin: a CURVED leading
-// edge (swept back and bowed), a CURVED trailing edge that develops soft
-// scalloped "fingers" toward the tip (the emarginated primaries — suggested by a
-// smooth cosine ripple, NOT by separate cards), gentle camber and real thickness
-// tapering to a soft tip. The planform sweeps and tapers like a soaring bird's
-// wing. Built once per side and bent only at the shoulder/elbow/wrist bones in
-// Bird (the membrane itself is one mesh per bone-region: arm, fore, hand).
-//
-// `span0..span1` is the X extent of this section; `rootChord`/`tipChord` the
-// fore-aft depth at each end; `le0`/`le1` how far forward (+Z) the leading edge
-// sits; `fingers` enables the scalloped primary slots on the trailing edge
-// (true for the hand section only). All edges are curves.
+// THE UNIFIED BODY SKIN — body + neck + head + bill + lower jaw + tail fan,
+// merged into ONE geometry sharing ONE skeleton. Painted as one continuous
+// surface so colour and shading flow unbroken across every former "joint".
 // ===========================================================================
-export function buildWingSection(
-  side: number,
-  span0: number, span1: number,
-  rootChord: number, tipChord: number,
-  le0: number, le1: number,
-  rootThick: number, tipThick: number,
-  fingers: boolean,
-  inner: boolean,
-): THREE.BufferGeometry {
-  const NSPAN = fingers ? 26 : 14;
-  const NCHORD = 7;
-  const top: number[] = [];
-  const bot: number[] = [];
-  for (let i = 0; i < NSPAN; i++) {
-    const t = i / (NSPAN - 1); // 0 root → 1 tip
-    const x = side * (span0 + (span1 - span0) * t);
-    const chord = rootChord + (tipChord - rootChord) * t;
-    const thick = rootThick + (tipThick - rootThick) * t;
-    // leading edge bows forward then sweeps back — a smooth curve, never straight
-    const le = le0 + (le1 - le0) * t + 0.04 * Math.sin(t * Math.PI);
-    for (let j = 0; j < NCHORD; j++) {
-      const v = j / (NCHORD - 1); // 0 leading → 1 trailing
-      // trailing-edge envelope: rounded at the wrist, scalloped into soft fingers
-      // toward the tip if `fingers`. The scallop is a smooth cosine, so the slots
-      // are curves — emarginated tips suggested, not stamped cards.
-      let trail = chord;
-      if (fingers) {
-        const finger = 0.5 + 0.5 * Math.cos((t * 4.5 - 0.2) * Math.PI * 2); // 0..1 ripple
-        const depth = smoothstep(0.45, 1.0, t); // fingers only develop toward the tip
-        trail = chord * (1 - 0.42 * depth * (1 - finger));
-        // outer fingers also reach further back (longer primaries)
-        trail += chord * 0.5 * smoothstep(0.5, 1.0, t) * finger;
-      }
-      const z = le - trail * v;
-      // camber: the surface bows up; thicker near the leading edge (teardrop)
-      const camberShape = Math.sin(Math.PI * v); // 0 at edges, 1 mid-chord
-      const thFactor = (1 - v) * 0.7 + 0.3; // fuller leading edge
-      const th = thick * thFactor * (0.4 + 0.6 * camberShape);
-      const camber = 0.55 * thick * camberShape * (1 - 0.3 * t);
-      // gentle whole-wing droop and a soft downward bow at the tip (gull curve)
-      const droop = -0.06 * t * t - 0.02 * v * t;
-      const y = camber + droop;
-      top.push(x, y + th, z);
-      bot.push(x, y - th * 0.7, z); // underside a touch flatter (airfoil)
-    }
-  }
-  return membraneFromGrids(top, bot, NSPAN, NCHORD, (c, _x, y, z, nx, ny, nz, bb) => {
-    const t = Math.abs(_x) / Math.max(1e-3, Math.max(Math.abs(bb.min.x), Math.abs(bb.max.x)));
-    const top01 = (y - bb.min.y) / Math.max(1e-3, bb.max.y - bb.min.y);
-    const trail01 = (bb.max.z - z) / Math.max(1e-3, bb.max.z - bb.min.z); // 0 LE → 1 TE
-    // inner wing pale covert grey; the primaries (outer + trailing) go charcoal
-    const primary = fingers ? smoothstep(0.35, 0.95, Math.max(t, trail01 * 0.7)) : (inner ? 0 : 0.3 * t);
-    const base = C_COVERT.clone().lerp(C_PRIMARY, primary);
-    c.copy(C_COVERT_LOW).lerp(base, smoothstep(0.2, 0.7, top01));
-    // a pale lip along the very trailing edge (sunlit feather rim)
-    c.lerp(C_FEATHER_EDGE, smoothstep(0.86, 1.0, trail01) * 0.4 * (1 - primary));
-    // cool sheen highlight on the dark primary tips
-    if (primary > 0.5) c.lerp(C_PRIMARY_EDGE, smoothstep(0.6, 1.0, t) * 0.4);
-    c.multiplyScalar(sunlit(nx, ny, nz, 0.13));
-  }, side < 0); // mirror the winding for the left wing so faces point outward
+export interface BodyBuild {
+  geo: THREE.BufferGeometry;
+  boneRest: THREE.Vector3[]; // rest world(local-root)-space head of each bone
 }
 
-// ===========================================================================
-// SCAPULAR MANTLE — a soft, continuous swept cape laid over the shoulders/back,
-// blending the body into the wing roots so there's no hard seam where the wings
-// meet the torso. A single smooth surface (NOT rows of covert cards), gently
-// scalloped at its trailing edge to whisper "folded plumage". Sits on the back.
-// ===========================================================================
-export function buildMantle(): THREE.BufferGeometry {
-  const NSPAN = 19, NCHORD = 5;
-  const top: number[] = [];
-  const bot: number[] = [];
-  for (let i = 0; i < NSPAN; i++) {
-    const u = (i / (NSPAN - 1)) * 2 - 1; // -1..1 across the back
-    const x = u * 0.22;
-    // the cape drapes down the flanks: y drops with |u|
-    const drape = -0.16 * u * u;
-    // front (over shoulders) to back (toward rump)
-    const z0 = 0.55 - 0.06 * u * u; // leading edge near the shoulders
-    const reach = 0.95 * (1 - 0.25 * u * u) * (1 + 0.03 * Math.cos(u * Math.PI * 5)); // scalloped hem
-    for (let j = 0; j < NCHORD; j++) {
-      const v = j / (NCHORD - 1); // 0 shoulders → 1 rump
-      const z = z0 - reach * v;
-      const lift = 0.16 + drape - 0.05 * v; // sits just above the back
-      const th = 0.012 * (1 - 0.5 * v) + 0.002;
-      top.push(x, lift + th, z);
-      bot.push(x, lift - th, z);
+export function buildBodySkin(): BodyBuild {
+  const stations = bodySpine();
+  const { geo: bodyGeo, boneRest } = sweepBodySkin(stations);
+  roughen(bodyGeo, 0.01, 9, 0.4);
+
+  const jaw = buildLowerJawSkin().geo;
+  const tailFan = buildTailFanSkin();
+
+  // merge the three skinned parts into ONE geometry (one draw call, one material).
+  // mergeGeometries keeps the matching attributes (position/normal/skinIndex/
+  // skinWeight); we recompute colour over the whole merged surface so the wash is
+  // continuous.
+  const merged = mergeGeometries([bodyGeo, jaw, tailFan], false)!;
+  bodyGeo.dispose(); jaw.dispose(); tailFan.dispose();
+  merged.computeVertexNormals();
+
+  // ---- paint the whole unified skin in one pass ----
+  paint(merged, (c, x, y, z, nx, ny, nz, bb) => {
+    const top = (y - bb.min.y) / Math.max(1e-3, bb.max.y - bb.min.y);
+    // base body gradient: slate underside → grey → pearl back
+    c.copy(C_BODY_LOW).lerp(C_BODY, smoothstep(0.2, 0.55, top))
+      .lerp(C_BODY_TOP, smoothstep(0.58, 1.0, top) * 0.85);
+    // pale nape over the neck/head region (keyed to absolute z so it's robust to
+    // the bounding box stretching with the tail fan)
+    c.lerp(C_NECK, smoothstep(0.62, 0.78, top) * smoothstep(0.3, 0.6, z) * 0.5);
+    // dusky crown smudge on the very top of the head (z ≈ 0.86 → 1.05)
+    const crown = smoothstep(0.86, 1.0, top) * smoothstep(0.82, 0.92, z) * smoothstep(1.12, 1.0, z);
+    c.lerp(C_CROWN, crown * 0.7);
+    // ---- bill: warm ochre, forward of the head (z ≳ 1.13) ----
+    const billT = smoothstep(1.1, 1.18, z);
+    if (billT > 0) {
+      const along = smoothstep(1.13, 1.66, z); // 0 base → 1 tip
+      const bill = C_BILL.clone().lerp(C_BILL_TIP, along * 0.9);
+      if (top > 0.55) bill.lerp(C_BILL_RIDGE, (top - 0.55) / 0.45 * 0.4); // culmen ridge
+      if (along > 0.85) bill.lerp(C_BILL_TIP.clone().multiplyScalar(0.7), (along - 0.85) / 0.15 * 0.8); // nail
+      c.lerp(bill, billT);
     }
-  }
-  return membraneFromGrids(top, bot, NSPAN, NCHORD, (c, x, _y, z, nx, ny, nz, bb) => {
-    const f = (bb.max.z - z) / Math.max(1e-3, bb.max.z - bb.min.z);
-    const lat = Math.abs(x) / 0.22;
-    c.copy(C_BODY_TOP).lerp(C_COVERT, smoothstep(0.3, 0.9, f) * 0.7);
-    c.lerp(C_FEATHER_SHADE, lat * 0.25 + smoothstep(0.6, 1.0, f) * 0.15);
-    c.lerp(C_FEATHER_EDGE, smoothstep(0.9, 1.0, f) * 0.3);
+    // ---- tail feathers: the rear fan (z behind the rump) reads as overlapping
+    // rectrices — alternating light/shadow bands across the span + a pale feather
+    // lip toward the trailing tips, so it looks like plumage, not a flat flap. ----
+    const tailReg = smoothstep(-0.95, -1.05, z); // 0 rump → 1 well into the fan
+    if (tailReg > 0) {
+      const band = 0.5 + 0.5 * Math.cos(x * Math.PI * TAIL_FEATHERS * 2); // per-feather ripple
+      const along = smoothstep(-1.0, -1.55, z); // 0 root → 1 trailing tip
+      const tcol = C_COVERT.clone().lerp(C_PRIMARY, smoothstep(0.35, 1.0, along) * 0.75);
+      tcol.lerp(C_FEATHER_SHADE, (1 - band) * (0.18 + 0.2 * along)); // shadowed feather gaps
+      tcol.lerp(C_FEATHER_EDGE, smoothstep(0.82, 1.0, along) * band * 0.5); // sunlit feather lips
+      c.lerp(tcol, tailReg);
+    }
+    // soft AO gathering under the belly
+    c.multiplyScalar(0.9 + 0.1 * smoothstep(0.12, 0.5, top));
     c.multiplyScalar(sunlit(nx, ny, nz, 0.13));
   });
+  brokenColour(merged, 0.045, 7);
+
+  return { geo: merged, boneRest };
 }
 
-/** Length of the tarsus bone — Bird places the ankle/foot group at this −Z reach. */
+// ===========================================================================
+// WING — ONE continuous cambered airfoil membrane per side, ROOT BURIED IN THE
+// BODY so there's no hard shoulder seam. The membrane is weighted across four
+// bones along the span (shoulder→elbow→wrist→hand), so flapping bends one
+// continuous skin instead of swinging four cards. Built once per side as a
+// SkinnedMesh geometry; the per-wing skeleton lives in Bird.
+//
+// Bone layout for the wing skeleton (separate from the body skeleton):
+//   0 = shoulder, 1 = elbow, 2 = wrist, 3 = hand/primaries
+// ===========================================================================
+export const WBONE = { SHOULDER: 0, ELBOW: 1, WRIST: 2, HAND: 3, COUNT: 4 } as const;
+
+// Spanwise X of each wing bone joint (local wing space, side·X applied by caller).
+export const WING_JOINTS = [0.0, 0.5, 0.94, 1.28]; // shoulder, elbow, wrist, hand-root
+export const WING_TIP = 1.78; // primaries reach to here
+
+// Where the wing roots into the back (bob-space). Baked into the wing geometry so
+// the membrane root sits on the shoulder/back; the shoulder bone is placed here too
+// so the bone pivots coincide exactly with the geometry's spanwise joints.
+export const WING_ATTACH = new THREE.Vector3(0.05, 0.16, 0.2);
+
+// number of distinct primary "fingers" cut into the wingtip's trailing edge.
+const WING_PRIMARIES = 6;
+export function buildWingSkin(side: number): THREE.BufferGeometry {
+  // dense span so the feather notches in the trailing edge read crisply
+  const NSPAN = 56, NCHORD = 9;
+  const top: number[] = [], bot: number[] = [];
+  const skinIdx: number[] = [], skinWgt: number[] = [];
+
+  // map a spanwise position x (0..WING_TIP) to (boneA,boneB,wB) blending weight
+  const weightAt = (xspan: number): [number, number, number] => {
+    // find the joint span we're in
+    if (xspan <= WING_JOINTS[1]) {
+      const t = smoothstep(WING_JOINTS[0], WING_JOINTS[1], xspan);
+      return [WBONE.SHOULDER, WBONE.ELBOW, t * 0.5]; // shoulder-dominant inner arm
+    }
+    if (xspan <= WING_JOINTS[2]) {
+      const t = smoothstep(WING_JOINTS[1], WING_JOINTS[2], xspan);
+      return [WBONE.ELBOW, WBONE.WRIST, t];
+    }
+    if (xspan <= WING_JOINTS[3]) {
+      const t = smoothstep(WING_JOINTS[2], WING_JOINTS[3], xspan);
+      return [WBONE.WRIST, WBONE.HAND, t];
+    }
+    return [WBONE.HAND, WBONE.HAND, 0];
+  };
+
+  for (let i = 0; i < NSPAN; i++) {
+    const t = i / (NSPAN - 1); // 0 root → 1 tip
+    const xspan = t * WING_TIP;
+    const x = side * xspan;
+    // chord (fore-aft depth): broad at the arm, tapering to slim primaries
+    const chord = lerp(0.6, 0.12, smoothstep(0.0, 1.0, t)) * (1 - 0.18 * smoothstep(0.7, 1.0, t));
+    const thick = lerp(0.05, 0.006, t);
+    // leading edge sweeps back & bows forward (a smooth curve)
+    const le = lerp(0.2, -0.18, t) + 0.05 * Math.sin(t * Math.PI);
+    // whole-wing droop + gull bow at the tip
+    const droopBase = -0.05 * t * t;
+    // ROOT FAIRING: at the very root, lift the membrane up to the back line and
+    // shrink chord so it tucks into the body silhouette (no card sticking out).
+    const rootFair = smoothstep(0.12, 0.0, t); // 1 at root → 0 by 12% span
+    const [bA, bB, wB] = weightAt(xspan);
+    // TRAILING EDGE as feathers:
+    //  - inner wing (secondaries): a fine shallow scallop, one notch per feather
+    //  - outer wing (primaries): deep notches cut WING_PRIMARIES long fingers, the
+    //    emarginated soaring tip — each finger reaches back, with a gap between.
+    const secScallop = 0.04 * (0.5 - 0.5 * Math.cos(t * Math.PI * 16)); // fine inner ripple
+    const primPhase = smoothstep(0.45, 1.0, t) * WING_PRIMARIES; // count up the fingers
+    const primRipple = 0.5 - 0.5 * Math.cos(primPhase * Math.PI * 2); // 0 gap … 1 finger
+    const primDepth = smoothstep(0.5, 1.0, t);
+    for (let j = 0; j < NCHORD; j++) {
+      const v = j / (NCHORD - 1); // 0 leading → 1 trailing
+      let trail = chord * (1 - secScallop);
+      // primaries: deep notch (pull edge in at gaps) + long reach at finger crests
+      trail = trail * (1 - 0.5 * primDepth * (1 - primRipple))
+        + chord * 0.7 * smoothstep(0.5, 1.0, t) * primRipple;
+      const z = le - trail * v;
+      const camberShape = Math.sin(Math.PI * v);
+      const thFactor = (1 - v) * 0.7 + 0.3;
+      const th = thick * thFactor * (0.4 + 0.6 * camberShape);
+      const camber = 0.55 * thick * camberShape * (1 - 0.3 * t);
+      let y = camber + droopBase - 0.02 * v * t;
+      // fair the root DOWN & forward so it sinks into the back/flank silhouette
+      // (the membrane disappears into the body rather than meeting it at a hard
+      // line). The attachment offset is baked in so the root sits on the shoulder.
+      y += -rootFair * 0.06;
+      const zr = z + rootFair * 0.14;
+      // bake the body attachment so bone pivots == geometry joints in span-X
+      top.push(WING_ATTACH.x * side + x, WING_ATTACH.y + y + th, WING_ATTACH.z + zr);
+      bot.push(WING_ATTACH.x * side + x, WING_ATTACH.y + y - th * 0.7, WING_ATTACH.z + zr);
+      // skin weights (same for top & bottom vertex of this station/chord)
+      skinIdx.push(bA, bB, 0, 0); skinWgt.push(1 - wB, wB, 0, 0);
+    }
+  }
+  // bottom grid skin weights mirror the top (appended in membraneFromGrids order)
+  const topCount = skinIdx.length / 4;
+  for (let k = 0; k < topCount; k++) {
+    skinIdx.push(skinIdx[k * 4], skinIdx[k * 4 + 1], 0, 0);
+    skinWgt.push(skinWgt[k * 4], skinWgt[k * 4 + 1], 0, 0);
+  }
+
+  const g = membraneFromGrids(top, bot, NSPAN, NCHORD, side < 0);
+  g.setAttribute('skinIndex', new THREE.BufferAttribute(new Uint16Array(skinIdx), 4));
+  g.setAttribute('skinWeight', new THREE.BufferAttribute(new Float32Array(skinWgt), 4));
+  g.computeVertexNormals();
+
+  // paint the wing — built to read as FEATHERED plumage, not a smooth flap.
+  paint(g, (c, x, y, z, nx, ny, nz, bb) => {
+    const tspan = clamp01((Math.abs(x) - Math.abs(WING_ATTACH.x)) / WING_TIP);
+    const top01 = (y - bb.min.y) / Math.max(1e-3, bb.max.y - bb.min.y);
+    const trail01 = (bb.max.z - z) / Math.max(1e-3, bb.max.z - bb.min.z); // 0 LE → 1 TE
+    const primary = smoothstep(0.4, 0.95, Math.max(tspan, trail01 * 0.6));
+    const base = C_COVERT.clone().lerp(C_PRIMARY, primary);
+    c.copy(C_COVERT_LOW).lerp(base, smoothstep(0.25, 0.7, top01));
+
+    // --- secondary covert rows: gentle chordwise feather bands across the inner
+    // wing (rows of overlapping coverts) — light shaft, shadow at each overlap ---
+    const covertBands = 0.5 + 0.5 * Math.cos(trail01 * Math.PI * 6 - tspan * 2.0);
+    c.lerp(C_FEATHER_SHADE, (1 - covertBands) * 0.14 * (1 - primary) * smoothstep(0.15, 0.6, trail01));
+
+    // --- primary feather stripes: along the outer wing each primary is a long
+    // shaft separated by a shadowed gap; pale sunlit lip on the trailing rim ---
+    const primBand = 0.5 + 0.5 * Math.cos(tspan * Math.PI * 2 * WING_PRIMARIES);
+    if (primary > 0.2) {
+      c.lerp(C_FEATHER_SHADE.clone().multiplyScalar(0.8), (1 - primBand) * primary * 0.35); // gaps
+      c.lerp(C_PRIMARY_EDGE, primBand * smoothstep(0.5, 1.0, tspan) * 0.35); // shaft sheen
+    }
+
+    // pale feather lip along the very trailing edge (catches the sun)
+    c.lerp(C_FEATHER_EDGE, smoothstep(0.85, 1.0, trail01) * 0.45 * (1 - primary * 0.6));
+    c.multiplyScalar(sunlit(nx, ny, nz, 0.13));
+  });
+  brokenColour(g, 0.04, 7);
+  return g;
+}
+
+// ---------------------------------------------------------------------------
+// LEGS & FEET — slim trailing tubes + webbed feet, kept simple and parented to
+// the body so they stream behind. One merged mesh per leg.
+// ---------------------------------------------------------------------------
 export const TARSUS_LEN = 0.26;
 
-// ===========================================================================
-// LEG (tarsus) — a slim swept tube, faint knee swelling at the top tapering to
-// the ankle, gently curved (not a straight cylinder). Hip at the origin, trailing
-// toward −Z and dropping a little.
-// ===========================================================================
-export function buildLeg(_side: number): THREE.BufferGeometry {
+function sweepTube(spine: THREE.Vector3[], radii: number[], seg: number): THREE.BufferGeometry {
+  const curve = new THREE.CatmullRomCurve3(spine, false, 'catmullrom', 0.5);
+  const n = spine.length;
+  const tan: THREE.Vector3[] = [];
+  for (let i = 0; i < n; i++) tan.push(curve.getTangentAt(clamp01(i / (n - 1))).normalize());
+  let nrm = new THREE.Vector3(0, 1, 0);
+  if (Math.abs(tan[0].dot(nrm)) > 0.92) nrm.set(1, 0, 0);
+  nrm.sub(tan[0].clone().multiplyScalar(tan[0].dot(nrm))).normalize();
+  const q = new THREE.Quaternion(), axis = new THREE.Vector3();
+  const normals: THREE.Vector3[] = [], binormals: THREE.Vector3[] = [];
+  for (let i = 0; i < n; i++) {
+    if (i > 0) {
+      axis.crossVectors(tan[i - 1], tan[i]);
+      const len = axis.length();
+      if (len > 1e-6) {
+        axis.divideScalar(len);
+        const dot = clamp01((tan[i - 1].dot(tan[i]) + 1) / 2) * 2 - 1;
+        q.setFromAxisAngle(axis, Math.acos(dot));
+        nrm.applyQuaternion(q);
+      }
+      nrm.sub(tan[i].clone().multiplyScalar(tan[i].dot(nrm))).normalize();
+    }
+    normals.push(nrm.clone());
+    binormals.push(new THREE.Vector3().crossVectors(tan[i], nrm).normalize());
+  }
+  const verts: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const c = spine[i], nA = normals[i], bA = binormals[i], r = radii[i];
+    for (let s = 0; s < seg; s++) {
+      const a = (s / seg) * Math.PI * 2;
+      const ux = Math.cos(a) * r, uy = Math.sin(a) * r;
+      verts.push(c.x + bA.x * ux + nA.x * uy, c.y + bA.y * ux + nA.y * uy, c.z + bA.z * ux + nA.z * uy);
+    }
+  }
+  const idx: number[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    const a = i * seg, b = (i + 1) * seg;
+    for (let s = 0; s < seg; s++) {
+      const j = (s + 1) % seg;
+      idx.push(a + s, a + j, b + j, a + s, b + j, b + s);
+    }
+  }
+  const ci = verts.length / 3;
+  verts.push(spine[0].x, spine[0].y, spine[0].z);
+  for (let s = 0; s < seg; s++) idx.push(ci, ((s + 1) % seg), s);
+  const ce = verts.length / 3;
+  const e = spine[n - 1]; verts.push(e.x, e.y, e.z);
+  const baseE = (n - 1) * seg;
+  for (let s = 0; s < seg; s++) idx.push(ce, baseE + s, baseE + ((s + 1) % seg));
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
+export function buildLeg(): THREE.BufferGeometry {
   const N = 7;
-  const spine: THREE.Vector3[] = [];
-  const profiles: Profile[] = [];
+  const spine: THREE.Vector3[] = [], radii: number[] = [];
   for (let i = 0; i < N; i++) {
     const t = i / (N - 1);
-    const z = -TARSUS_LEN * t;
-    const drop = -0.05 * t - 0.015 * Math.sin(t * Math.PI); // slight curve
-    spine.push(new THREE.Vector3(0, drop, z));
-    const r = (0.03 - 0.012 * t) * (1 + 0.4 * Math.exp(-((t - 0.05) ** 2) / 0.02)) + 0.004;
-    profiles.push({ rx: r, ry: r * 1.05 });
+    spine.push(new THREE.Vector3(0, -0.05 * t - 0.015 * Math.sin(t * Math.PI), -TARSUS_LEN * t));
+    radii.push((0.03 - 0.012 * t) * (1 + 0.4 * Math.exp(-((t - 0.05) ** 2) / 0.02)) + 0.004);
   }
-  const g = sweep(spine, profiles, 12, N, true, true);
+  const g = sweepTube(spine, radii, 12);
   roughen(g, 0.0016, 40);
   return paint(g, (c, _x, y, _z, nx, ny, nz) => {
     c.copy(C_LEG).lerp(C_LEG_DARK, Math.max(0, -ny) * 0.3 + smoothstep(0.0, -0.05, y) * 0.2);
@@ -721,94 +826,44 @@ export function buildLeg(_side: number): THREE.BufferGeometry {
   });
 }
 
-// ===========================================================================
-// WEBBED FOOT — three forward toes as slim swept tapering tubes, joined by a soft
-// CURVED web membrane (a cambered sheet, dipping between the toes), ankle at the
-// origin, toes reaching −Z. No flat triangles, no prisms: tubes + a curved skin.
-// ===========================================================================
 export function buildFoot(side: number): THREE.BufferGeometry {
   const toeLen = 0.17;
   const toeAngles = [-0.4, 0, 0.4];
-  const ankle = new THREE.Vector3(0, 0, 0);
   const tips = toeAngles.map((a) =>
     new THREE.Vector3(side * Math.sin(a) * toeLen, -0.014, -Math.cos(a) * toeLen));
-
-  // toe digits — slim swept tubes with a soft dip
   const parts: THREE.BufferGeometry[] = [];
   for (const tip of tips) {
     const N = 5;
-    const spine: THREE.Vector3[] = [];
-    const profs: Profile[] = [];
+    const spine: THREE.Vector3[] = [], radii: number[] = [];
     for (let s = 0; s < N; s++) {
       const t = s / (N - 1);
-      spine.push(new THREE.Vector3(
-        ankle.x + (tip.x - ankle.x) * t,
-        ankle.y + (tip.y - ankle.y) * t - 0.01 * Math.sin(Math.PI * t),
-        ankle.z + (tip.z - ankle.z) * t,
-      ));
-      const r = 0.013 * (1 - 0.75 * t) + 0.0025;
-      profs.push({ rx: r, ry: r });
+      spine.push(new THREE.Vector3(tip.x * t, tip.y * t - 0.01 * Math.sin(Math.PI * t), tip.z * t));
+      radii.push(0.013 * (1 - 0.75 * t) + 0.0025);
     }
-    parts.push(sweep(spine, profs, 8, N, true, true));
+    parts.push(sweepTube(spine, radii, 8));
   }
-
-  // web membrane — a curved cambered sheet spanning the three toes, dipping
-  // (scalloped) between adjacent toes so the membrane reads as soft webbing.
   const NU = 13, NV = 5;
-  const top: number[] = [];
-  const bot: number[] = [];
+  const top: number[] = [], bot: number[] = [];
   for (let i = 0; i < NU; i++) {
-    const u = i / (NU - 1); // 0 → outer toe, 1 → other outer toe, across the splay
+    const u = i / (NU - 1);
     const ang = toeAngles[0] + (toeAngles[2] - toeAngles[0]) * u;
-    // dip between toes: minimal at the toe rays, deepest midway between them
-    const between = Math.sin(u * Math.PI * 2); // ±1 between the three rays
+    const between = Math.sin(u * Math.PI * 2);
     for (let j = 0; j < NV; j++) {
-      const v = j / (NV - 1); // 0 ankle → 1 toe-tip line
+      const v = j / (NV - 1);
       const reach = toeLen * v;
       const x = side * Math.sin(ang) * reach;
       const z = -Math.cos(ang) * reach;
-      const dip = -0.016 * Math.abs(between) * v; // membrane sags between the toes
-      const y = -0.012 * v + dip;
-      const th = 0.0035;
-      top.push(x, y + th, z);
-      bot.push(x, y - th, z);
+      const y = -0.012 * v - 0.016 * Math.abs(between) * v;
+      top.push(x, y + 0.0035, z); bot.push(x, y - 0.0035, z);
     }
   }
-  const web = membraneFromGrids(top, bot, NU, NV, (c) => { c.copy(C_WEB); }, side < 0);
-  parts.push(web);
-
-  // merge toe-tubes + web into one mesh
-  const merged = mergeGeos(parts);
+  parts.push(membraneFromGrids(top, bot, NU, NV, side < 0));
+  const merged = mergeGeometries(parts, false)!;
+  parts.forEach((p) => p.dispose());
+  merged.computeVertexNormals();
   return paint(merged, (c, _x, y, _z, nx, ny, nz) => {
     const onWeb = Math.abs(y) < 0.008;
     c.copy(onWeb ? C_WEB : C_LEG).lerp(C_LEG_DARK, Math.max(0, -ny) * 0.3);
     c.multiplyScalar(sunlit(nx, ny, nz, 0.1));
   });
 }
-
-/** Minimal indexed merge of position/normal attributes (colour rebaked by caller). */
-function mergeGeos(geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
-  let vT = 0, iT = 0;
-  for (const g of geos) { vT += g.attributes.position.count; iT += g.index!.count; }
-  const P = new Float32Array(vT * 3), Nn = new Float32Array(vT * 3);
-  const I = new Uint32Array(iT);
-  let vo = 0, io = 0, base = 0;
-  for (const g of geos) {
-    P.set(g.attributes.position.array as Float32Array, vo * 3);
-    if (g.attributes.normal) Nn.set(g.attributes.normal.array as Float32Array, vo * 3);
-    const gi = g.index!;
-    for (let k = 0; k < gi.count; k++) I[io + k] = gi.getX(k) + base;
-    vo += g.attributes.position.count; io += gi.count; base += g.attributes.position.count;
-    g.dispose();
-  }
-  const out = new THREE.BufferGeometry();
-  out.setAttribute('position', new THREE.BufferAttribute(P, 3));
-  out.setAttribute('normal', new THREE.BufferAttribute(Nn, 3));
-  out.setIndex(new THREE.BufferAttribute(I, 1));
-  out.computeVertexNormals();
-  return out;
-}
-
-// Re-export the smooth-normal helper so Bird.ts can finish each part with a
-// clean, crease-aware shading pass before assembly.
-export { toCreasedNormals };

@@ -2,39 +2,36 @@ import * as THREE from 'three/webgpu';
 import { Updatable } from '../core/Engine';
 import { FlightController } from './FlightController';
 import {
-  buildBody, buildHead, buildBill, buildTail, buildGular, buildMantle,
-  buildWingSection, buildLeg, buildFoot,
-  buildNeckSegment, NECK_SPINE,
-  TARSUS_LEN, toCreasedNormals, C_EYE,
+  buildBodySkin, buildWingSkin, buildLeg, buildFoot,
+  BONE, WBONE, WING_JOINTS, WING_ATTACH, TARSUS_LEN, C_EYE,
 } from './birdGeometry';
 
 // THE PELICAN — the soul of the piece. The player IS this bird, gliding alone
-// over the painted meadow. Every form is a SMOOTH, CONTINUOUS, CURVED surface
-// swept along a spline (see birdGeometry.ts): there is not one straight edge,
-// flat card or primitive anywhere on it. Body, neck and tail flow as a single
-// sinuous form; the wings are single cambered airfoil membranes with curved
-// leading/trailing edges; the bill down-curves along its own spline; the feet are
-// soft tubes joined by a curved web. It reads as a sculpted living animal that
-// belongs in the splat-painted world, not a CAD model dropped into a painting.
+// over the painted meadow.
 //
-// Articulation is a small bone tree (NO skinning):
-//   root → bob → torso(breathes) ,
-//                neck chain (a continuous S, sliced onto 4 bones for a travelling
-//                            wave) → head → bill ,
-//                tail , 2× leg→foot , 2× wing(shoulder→elbow→wrist).
-// The neck/body/tail joints are radius-matched and overlap so the silhouette
-// stays continuous even as each bone moves.
+// COHERENCE BY CONSTRUCTION. The bird is no longer a kit of capped tubes stuck
+// together. The entire body + neck + head + bill + tail is ONE welded, smooth,
+// continuously-normalled skin swept along a single master spline (see
+// birdGeometry.buildBodySkin). It is a SkinnedMesh: every vertex carries blended
+// skin weights against a small bone chain, so when a bone bends, the shared
+// surface stretches with it — the silhouette never opens a seam. The wings are
+// one continuous cambered membrane each (also SkinnedMesh, weighted across
+// shoulder→elbow→wrist→hand) whose root is faired into the back, so there's no
+// hard shoulder join. ONE body material, ONE wing material. A single graceful
+// sculpted creature — stylised, organic, alive — that belongs in the painterly
+// world, not a CAD assembly.
 //
 // Motion is the soul: a large bird mostly GLIDES on a held dihedral and only now
 // and then drives a slow, weighty, asymmetric beat (loaded downstroke, lingering
 // recovery) with a proximal→distal lag so the wing unrolls and the tips trail on
-// underdamped springs. Layered on top: a heaving/breathing torso that never goes
-// still, a travelling-wave S-neck whose joints each lag the last, feet that trail
-// and paddle with per-leg phase offsets and inertia, and a tail with the longest
-// follow-through that steers into turns. Everything SLOW, WEIGHTY, eased, calm.
+// underdamped springs. Layered on: a heaving/breathing torso, a travelling-wave
+// S-neck (each bone lags the last), feet that trail and paddle, and a tail with
+// the longest follow-through that steers into turns. Everything SLOW, WEIGHTY,
+// eased, calm. Because it all drives BONES of the welded skin, the form flexes
+// like a supple animal and never tears.
 //
-// Contract with the engine (unchanged): `new Bird(scene, flight)` adds its root to
-// the scene; `update(dt, t)` copies flight.position and sets
+// Contract with the engine (unchanged): `new Bird(scene, flight)` adds its root
+// to the scene; `update(dt, t)` copies flight.position and sets
 // root.rotation.set(pitch, yaw, roll, 'YXZ'). Nose +Z, up +Y, wings ±X.
 
 const TAU = Math.PI * 2;
@@ -49,7 +46,7 @@ const TAIL_LAG = 1.1;
 
 // --- primary-tip spring (underdamped → trail & settle, the weighty overshoot) ---
 const STIFF_K = 46;
-const DAMP_C = 11.0; // ~2·√K·0.81 → tips overshoot a little then settle
+const DAMP_C = 11.0;
 
 // --- rest pose (radians) ---
 const REST_DIHEDRAL = 0.16; // shoulders held in a soft soaring V
@@ -60,90 +57,137 @@ const SCALE = 3.0;
 
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 
-// Smooth 0..1 envelope from a -1..1 signal, used to shape the glide/flap blend so
-// the bird hangs on long glides and only now and then commits to beating.
 function smooth01(s: number): number {
   const x = s * 0.5 + 0.5;
   return x * x * (3 - 2 * x);
 }
 
 interface Wing {
-  shoulder: THREE.Group;
-  elbow: THREE.Group;
-  wrist: THREE.Group;
-  fan: THREE.Group;
+  shoulder: THREE.Bone;
+  elbow: THREE.Bone;
+  wrist: THREE.Bone;
+  hand: THREE.Bone;
   sgn: number;
   springPos: number;
   springVel: number;
-}
-
-interface NeckJoint {
-  group: THREE.Group;
-  restX: number; // rest rotation about X (the S-curve at rest)
 }
 
 export class Bird implements Updatable {
   private flight: FlightController;
   private root = new THREE.Group();
   private bob = new THREE.Group(); // whole-body heave / surge / sway
-  private torso = new THREE.Group(); // the body skin: breathes & flexes on its own
-  private neck: NeckJoint[] = []; // 4-bone chain reconstructing the continuous S
-  private head!: THREE.Group;
-  private billLower!: THREE.Group;
-  private tail!: THREE.Group;
+  // body skeleton bones (the welded skin bends to these)
+  private bTorso!: THREE.Bone;
+  private bTail!: THREE.Bone;
+  private bNeck: THREE.Bone[] = [];
+  private bHead!: THREE.Bone;
+  private bJaw!: THREE.Bone;
+  private bodyMesh!: THREE.SkinnedMesh;
   private legs: { hip: THREE.Group; ankle: THREE.Group; sgn: number }[] = [];
   private wings: Wing[] = [];
   private phase = 0;
-  private flapEnergy = 0; // eased flap intensity (climb-coupled)
+  private flapEnergy = 0;
 
   constructor(scene: THREE.Scene, flight: FlightController) {
     this.flight = flight;
 
-    // Smooth single-sided MeshStandard materials (every part is a closed/curved
-    // surface, so no DoubleSide / flatShading). One body material, one feather
-    // material with a whisper of cool emissive for the dark primaries, a glossier
-    // bill material, a leg material.
-    const plumeMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.66, metalness: 0 });
-    const featherMat = new THREE.MeshStandardMaterial({
+    // One soft stylised body material, one for the wing membranes, plus small
+    // accent materials. Vertex colours carry the painterly wash + baked light;
+    // MeshStandard lets the real scene sun + hemisphere carve the form.
+    const bodyMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62, metalness: 0 });
+    const wingMat = new THREE.MeshStandardMaterial({
       vertexColors: true, roughness: 0.54, metalness: 0,
       emissive: new THREE.Color('#3a4150'), emissiveIntensity: 0.03,
     });
-    const billMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.38, metalness: 0 });
     const legMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0 });
-    const pouchMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0 });
 
     this.root.add(this.bob);
-    // The torso skin lives on its own group so it can breathe and flex (stretch on
-    // the upstroke, compress & lift the breast on the downstroke) independently of
-    // the whole-body heave — that relative motion reads as a living body.
-    this.bob.add(this.torso);
 
-    // ---- body (one continuous swept teardrop) ----
-    this.torso.add(new THREE.Mesh(toCreasedNormals(buildBody(), Math.PI), plumeMat));
+    // ---- the unified body skin + its skeleton ----
+    this.buildBody(bodyMat);
 
-    // ---- scapular mantle: a single soft swept cape over the back/shoulders that
-    // blends the body into the wing roots (no hard seam, no rows of cards) ----
-    this.torso.add(new THREE.Mesh(toCreasedNormals(buildMantle(), Math.PI * 0.7), featherMat));
+    // ---- eyes: small glossy beads in a pale ring, parented to the head bone ----
+    this.buildEyes();
 
-    // ---- retracted S-neck → head ----
-    // The neck is ONE continuous S-spine (NECK_SPINE) sliced onto 4 bones so a
-    // travelling wave can animate it while the surface stays seamless. We build
-    // each bone from a sub-arc of that spine and compute its rest X-rotation from
-    // the curve's tangents, so the assembled chain reconstructs the exact S — but
-    // can now flex. Each bone is placed at the end of the previous segment.
-    this.buildNeck(plumeMat);
-    const headBone = this.neck[this.neck.length - 1].group;
+    // ---- wings: one continuous skinned membrane each, root faired into the back ----
+    this.wings.push(this.buildWing(+1, wingMat));
+    this.wings.push(this.buildWing(-1, wingMat));
 
-    // head — seats at the local end of the last neck segment
-    this.head = new THREE.Group();
-    this.head.position.copy(this.neckHeadOffset());
-    headBone.add(this.head);
-    this.head.add(new THREE.Mesh(toCreasedNormals(buildHead(), Math.PI), plumeMat));
+    // ---- legs: trailing, parented to the body bone so they stream behind ----
+    this.buildLegs(legMat);
 
-    // eyes — small glossy beads set into a pale eye-ring, with a tiny catch-light
+    this.root.scale.setScalar(SCALE);
+    this.root.traverse((o) => { o.frustumCulled = false; });
+    scene.add(this.root);
+  }
+
+  // Build the welded body skin as a SkinnedMesh driven by a small bone hierarchy.
+  // The skeleton mirrors the bones tagged into the geometry; each bone's rest head
+  // is read from buildBodySkin's boneRest so the skin maps 1:1 to its rest pose.
+  private buildBody(mat: THREE.Material) {
+    const { geo, boneRest } = buildBodySkin();
+
+    // bone hierarchy:
+    //   bob → torso(BODY) → tail(TAIL)
+    //                     → neck0 → neck1 → neck2 → neck3 → head(HEAD) → jaw(JAW)
+    // Each child bone sits at the delta between its rest head and its parent's, so
+    // at rest the chain reconstructs the skeleton exactly and the skin is undeformed.
+    this.bTorso = new THREE.Bone();
+    this.bTorso.position.copy(boneRest[BONE.BODY]);
+
+    // tail hangs off the torso (rump)
+    this.bTail = new THREE.Bone();
+    this.bTail.position.copy(boneRest[BONE.TAIL]).sub(boneRest[BONE.BODY]);
+    this.bTorso.add(this.bTail);
+
+    // neck chain off the torso
+    const neckBones = [BONE.NECK0, BONE.NECK1, BONE.NECK2, BONE.NECK3];
+    let parent: THREE.Bone = this.bTorso;
+    let prevRest = boneRest[BONE.BODY];
+    for (const nb of neckBones) {
+      const b = new THREE.Bone();
+      b.position.copy(boneRest[nb]).sub(prevRest);
+      parent.add(b);
+      this.bNeck.push(b);
+      parent = b;
+      prevRest = boneRest[nb];
+    }
+    // head off the last neck bone
+    this.bHead = new THREE.Bone();
+    this.bHead.position.copy(boneRest[BONE.HEAD]).sub(prevRest);
+    parent.add(this.bHead);
+    // jaw off the head
+    this.bJaw = new THREE.Bone();
+    this.bJaw.position.copy(boneRest[BONE.JAW]).sub(boneRest[BONE.HEAD]);
+    this.bHead.add(this.bJaw);
+
+    // assemble the skeleton in BONE-index order so geo.skinIndex maps correctly
+    const bonesByIndex: THREE.Bone[] = new Array(BONE.COUNT);
+    bonesByIndex[BONE.TAIL] = this.bTail;
+    bonesByIndex[BONE.BODY] = this.bTorso;
+    bonesByIndex[BONE.NECK0] = this.bNeck[0];
+    bonesByIndex[BONE.NECK1] = this.bNeck[1];
+    bonesByIndex[BONE.NECK2] = this.bNeck[2];
+    bonesByIndex[BONE.NECK3] = this.bNeck[3];
+    bonesByIndex[BONE.HEAD] = this.bHead;
+    bonesByIndex[BONE.JAW] = this.bJaw;
+
+    const mesh = new THREE.SkinnedMesh(geo, mat);
+    const skeleton = new THREE.Skeleton(bonesByIndex);
+    // The skeleton root (torso bone) lives under the mesh; the mesh's own transform
+    // stays identity, so the geometry's bob-space spine coordinates map 1:1 to the
+    // bones at rest. bind() updates the bone world matrices and computes the rest
+    // inverses, so the welded skin is undeformed at the rest pose.
+    mesh.add(this.bTorso);
+    this.bob.add(mesh);
+    mesh.bind(skeleton);
+    this.bodyMesh = mesh;
+  }
+
+  private buildEyes() {
     const eyeGeo = new THREE.SphereGeometry(0.018, 12, 10);
     eyeGeo.scale(1, 1, 0.72);
-    const eyeMatGlossy = new THREE.MeshStandardMaterial({ color: C_EYE, roughness: 0.12, metalness: 0.05 });
+    const eyeMat = new THREE.MeshStandardMaterial({ color: C_EYE, roughness: 0.12, metalness: 0.05 });
     const ringGeo = new THREE.SphereGeometry(0.026, 12, 8);
     ringGeo.scale(1, 0.85, 0.4);
     const ringMat = new THREE.MeshStandardMaterial({ color: new THREE.Color('#b9c0c6'), roughness: 0.7, metalness: 0 });
@@ -152,157 +196,81 @@ export class Bird implements Updatable {
       color: new THREE.Color('#ffffff'), roughness: 0.2, metalness: 0,
       emissive: new THREE.Color('#dfe7ee'), emissiveIntensity: 0.5,
     });
+    // The HEAD bone pivots at the nape (≈ z 0.86 in bob-space); the head ovoid is
+    // centred ~0.1 ahead and ~0.71 up. Seat the eyes on the sides of that ovoid,
+    // expressed in the bone's local frame (subtract the bone anchor).
     for (const sx of [-1, 1]) {
       const ring = new THREE.Mesh(ringGeo, ringMat);
-      ring.position.set(sx * 0.07, 0.03, 0.07);
-      this.head.add(ring);
-      const eye = new THREE.Mesh(eyeGeo, eyeMatGlossy);
-      eye.position.set(sx * 0.072, 0.03, 0.076);
-      this.head.add(eye);
+      ring.position.set(sx * 0.082, 0.01, 0.12);
+      this.bHead.add(ring);
+      const eye = new THREE.Mesh(eyeGeo, eyeMat);
+      eye.position.set(sx * 0.085, 0.01, 0.126);
+      this.bHead.add(eye);
       const glint = new THREE.Mesh(glintGeo, glintMat);
-      glint.position.set(sx * 0.078, 0.038, 0.088);
-      this.head.add(glint);
+      glint.position.set(sx * 0.09, 0.018, 0.136);
+      this.bHead.add(glint);
     }
+  }
 
-    // bill — upper fixed to the head, lower on a tiny jaw pivot. Down-curved sweeps.
-    const upperBill = new THREE.Mesh(toCreasedNormals(buildBill(0.52, true), Math.PI * 0.55), billMat);
-    upperBill.position.set(0, -0.01, 0.18);
-    upperBill.rotation.x = 0.02;
-    this.head.add(upperBill);
+  // A wing: one continuous skinned membrane bent at four bones. The bones sit at
+  // the spanwise joints (WING_JOINTS); flexing them bends one flowing skin.
+  private buildWing(side: number, wingMat: THREE.Material): Wing {
+    const geo = buildWingSkin(side);
 
-    this.billLower = new THREE.Group();
-    this.billLower.position.set(0, -0.04, 0.18);
-    this.billLower.rotation.x = 0.04;
-    this.head.add(this.billLower);
-    this.billLower.add(new THREE.Mesh(toCreasedNormals(buildBill(0.5, false), Math.PI * 0.55), billMat));
-    // the signature pelican gular pouch slung under the lower mandible
-    const pouch = new THREE.Mesh(toCreasedNormals(buildGular(0.42, 0.07), Math.PI * 0.8), pouchMat);
-    pouch.position.set(0, 0.004, 0.0);
-    this.billLower.add(pouch);
+    // wing skeleton: shoulder → elbow → wrist → hand. The bone joints coincide
+    // exactly with the geometry's spanwise joints (WING_JOINTS, measured from the
+    // baked-in WING_ATTACH root), so rotating a bone pivots its faired region of
+    // the one continuous skin precisely — no shear at the joints.
+    const shoulder = new THREE.Bone();
+    const elbow = new THREE.Bone();
+    const wrist = new THREE.Bone();
+    const hand = new THREE.Bone();
+    elbow.position.set(side * (WING_JOINTS[1] - WING_JOINTS[0]), 0, 0);
+    wrist.position.set(side * (WING_JOINTS[2] - WING_JOINTS[1]), 0, 0);
+    hand.position.set(side * (WING_JOINTS[3] - WING_JOINTS[2]), 0, 0);
+    shoulder.add(elbow); elbow.add(wrist); wrist.add(hand);
 
-    // ---- tail: one continuous swept fan-wedge (curved, scalloped trailing edge) ----
-    this.tail = new THREE.Group();
-    this.tail.position.set(0, 0.04, -0.9);
-    this.tail.rotation.x = -0.04;
-    this.bob.add(this.tail);
-    this.tail.add(new THREE.Mesh(toCreasedNormals(buildTail(0.5, 0.2), Math.PI * 0.6), featherMat));
+    // seat the shoulder at the baked attachment (x mirrored per side)
+    shoulder.position.set(side * WING_ATTACH.x, WING_ATTACH.y, WING_ATTACH.z);
 
-    // ---- legs: tucked & trailing back the way a soaring pelican streams them.
-    // hip → tarsus; a separate ankle group carries the webbed foot so the toes
-    // and web can paddle/flex. The tarsus tip is at −Z·TARSUS_LEN (slight drop). ----
+    const bonesByIndex: THREE.Bone[] = new Array(WBONE.COUNT);
+    bonesByIndex[WBONE.SHOULDER] = shoulder;
+    bonesByIndex[WBONE.ELBOW] = elbow;
+    bonesByIndex[WBONE.WRIST] = wrist;
+    bonesByIndex[WBONE.HAND] = hand;
+
+    const mesh = new THREE.SkinnedMesh(geo, wingMat);
+    const skeleton = new THREE.Skeleton(bonesByIndex);
+    mesh.add(shoulder);
+    this.bob.add(mesh);
+    mesh.bind(skeleton);
+
+    return { shoulder, elbow, wrist, hand, sgn: side, springPos: 0, springVel: 0 };
+  }
+
+  private buildLegs(legMat: THREE.Material) {
     for (const sx of [-1, 1]) {
       const hip = new THREE.Group();
-      hip.position.set(sx * 0.08, -0.16, -0.5);
-      hip.rotation.x = -0.35; // streams up toward the tail line
-      this.bob.add(hip);
-      hip.add(new THREE.Mesh(toCreasedNormals(buildLeg(sx), Math.PI * 0.6), legMat));
+      // bob-space hip ≈ (±0.08, -0.16, -0.5); torso bone pivots at (0,-0.02,-0.12),
+      // so subtract that anchor to seat the legs correctly under the rear belly.
+      hip.position.set(sx * 0.08, -0.14, -0.38);
+      hip.rotation.x = -0.35;
+      // parent to the torso bone so legs stream with the body's motion
+      this.bTorso.add(hip);
+      hip.add(new THREE.Mesh(buildLeg(), legMat));
 
       const ankle = new THREE.Group();
       ankle.position.set(0, -0.05, -TARSUS_LEN);
-      ankle.rotation.x = 0.5; // foot trails back, toes relaxed
+      ankle.rotation.x = 0.5;
       hip.add(ankle);
-      ankle.add(new THREE.Mesh(toCreasedNormals(buildFoot(sx), Math.PI * 0.6), legMat));
+      ankle.add(new THREE.Mesh(buildFoot(sx), legMat));
 
       this.legs.push({ hip, ankle, sgn: sx });
     }
-
-    // ---- wings ----
-    this.wings.push(this.buildWing(+1, featherMat));
-    this.wings.push(this.buildWing(-1, featherMat));
-
-    this.root.scale.setScalar(SCALE);
-    this.root.traverse((o) => { o.frustumCulled = false; });
-    scene.add(this.root);
-  }
-
-  // Build the 4-bone neck chain from the continuous master S-spine. Each bone's
-  // mesh is a swept sub-arc built in BODY orientation (so the assembled meshes tile
-  // the exact S-curve when no rotations are applied). At rest every bone rotation
-  // is therefore 0; each bone is simply placed at the previous segment's end. The
-  // animator then adds a travelling-wave rotation about each bone's pivot, bending
-  // the continuous S like a real supple neck. restX is 0 by construction.
-  private buildNeck(mat: THREE.Material) {
-    const curve = new THREE.CatmullRomCurve3(NECK_SPINE, false, 'catmullrom', 0.5);
-    const cuts = [0, 0.3, 0.55, 0.8, 1.0]; // 4 segments
-    // seat the whole neck on the body's shoulder/neck join; the spine's own base is
-    // baked into the first mesh, so we offset by (shoulder − spineBase).
-    const spineBase = curve.getPointAt(0).clone();
-    const shoulder = new THREE.Vector3(0, 0.16, 0.74); // sits in the body's neck join
-    let parent: THREE.Object3D = this.bob;
-    let prevStart = spineBase.clone();
-    let firstSeated = false;
-    for (let k = 0; k < cuts.length - 1; k++) {
-      const t0 = cuts[k], t1 = cuts[k + 1];
-      const g = new THREE.Group();
-      const start = curve.getPointAt(t0).clone();
-      // No rest rotation accumulates, so the parent's local frame == body frame:
-      // the child sits at the body-space delta from the parent segment's start.
-      if (!firstSeated) {
-        g.position.copy(shoulder); // base bone seated on the shoulders
-        firstSeated = true;
-      } else {
-        g.position.copy(start).sub(prevStart);
-      }
-      parent.add(g);
-      g.add(new THREE.Mesh(toCreasedNormals(buildNeckSegment(t0, t1), Math.PI), mat));
-      this.neck.push({ group: g, restX: 0 });
-      parent = g;
-      prevStart = start;
-    }
-  }
-
-  /** Local-space end delta of the last neck segment (where the head seats). */
-  private neckHeadOffset(): THREE.Vector3 {
-    const curve = new THREE.CatmullRomCurve3(NECK_SPINE, false, 'catmullrom', 0.5);
-    return curve.getPointAt(1.0).clone().sub(curve.getPointAt(0.8));
-  }
-
-  // A wing: shoulder (inner arm membrane) → elbow (forearm membrane) → wrist
-  // (hand) → fan (the fingered tip membrane that trails on the spring). Each
-  // bone-region is ONE continuous cambered airfoil membrane with curved edges —
-  // there are no feather cards anywhere. The sections overlap a hair at the
-  // joints so the wing reads as one flowing skin through the whole flap.
-  private buildWing(side: number, featherMat: THREE.Material): Wing {
-    // SHOULDER / inner arm — broad cambered membrane from the body out to the elbow
-    const shoulder = new THREE.Group();
-    shoulder.position.set(side * 0.16, 0.07, 0.06);
-    this.bob.add(shoulder);
-    const arm = buildWingSection(side, 0.0, 0.52, 0.58, 0.5, 0.18, 0.12, 0.05, 0.04, false, true);
-    shoulder.add(new THREE.Mesh(toCreasedNormals(arm, Math.PI * 0.6), featherMat));
-
-    // ELBOW / forearm — narrower cambered membrane carrying the secondaries (as a
-    // smoothly scalloped trailing edge, not cards)
-    const elbow = new THREE.Group();
-    elbow.position.set(side * 0.5, 0, 0);
-    shoulder.add(elbow);
-    const fore = buildWingSection(side, 0.0, 0.5, 0.5, 0.4, 0.1, 0.04, 0.04, 0.028, false, false);
-    elbow.add(new THREE.Mesh(toCreasedNormals(fore, Math.PI * 0.6), featherMat));
-
-    // WRIST / hand — slim outer membrane bridging into the fingered tip
-    const wrist = new THREE.Group();
-    wrist.position.set(side * 0.5, 0, 0);
-    elbow.add(wrist);
-    const hand = buildWingSection(side, 0.0, 0.3, 0.4, 0.34, 0.04, -0.02, 0.028, 0.02, false, false);
-    wrist.add(new THREE.Mesh(toCreasedNormals(hand, Math.PI * 0.6), featherMat));
-
-    // FAN — the long primaries as ONE continuous membrane with a curved, deeply
-    // scalloped trailing edge: the emarginated "fingers" of a soaring wingtip are
-    // suggested by smooth cosine slots, never separate blades. This is the part
-    // that trails and bends on the underdamped spring.
-    const fan = new THREE.Group();
-    fan.position.set(side * 0.3, 0, 0);
-    wrist.add(fan);
-    const tip = buildWingSection(side, 0.0, 0.62, 0.34, 0.12, -0.02, -0.16, 0.02, 0.006, true, false);
-    fan.add(new THREE.Mesh(toCreasedNormals(tip, Math.PI * 0.45), featherMat));
-
-    return { shoulder, elbow, wrist, fan, sgn: side, springPos: 0, springVel: 0 };
   }
 
   update(dt: number, t: number) {
     // --- transform (the controller's contract) ---
-    // The controller's `pitch` is +ve for a climb. A positive X-rotation pitches
-    // the nose *down*, so we negate it on X so a climb tips the nose up. Yaw/roll
-    // unchanged → the controller still owns heading and bank.
     this.root.position.copy(this.flight.position);
     this.root.rotation.set(-this.flight.pitch, this.flight.yaw, this.flight.roll, 'YXZ');
 
@@ -311,21 +279,18 @@ export class Bird implements Updatable {
 
     // --- glide vs. flap: mostly soaring, occasionally a run of deep beats ---
     const wantClimb = clamp(this.flight.pitch, 0, 0.42) / 0.42;
-    const cycleGate = smooth01(Math.sin(TAU * 0.05 * t) + 0.25); // 0 glide … 1 beat
+    const cycleGate = smooth01(Math.sin(TAU * 0.05 * t) + 0.25);
     const targetEnergy = clamp(0.12 + 0.7 * cycleGate + 0.45 * wantClimb, 0, 1.15);
     this.flapEnergy += (targetEnergy - this.flapEnergy) * Math.min(1, dt * 0.8);
     const amp = this.flapEnergy;
 
     // --- asymmetric drive: sharp loaded downstroke, slower lifted recovery ---
     const drive = Math.sin(ph) - DOWN_BIAS * Math.sin(2 * ph);
-    const driveDown = Math.max(0, drive); // 1 at full downstroke
+    const driveDown = Math.max(0, drive);
 
-    // shoulder: held dihedral + deep beat; small fore/aft sweep
     const shoulderZ = REST_DIHEDRAL + 0.7 * drive * amp;
     const sweep = 0.12 * Math.sin(ph - 0.4) * amp;
 
-    // elbow & wrist lag the shoulder and flex extra on the downstroke → the wing
-    // visibly unrolls: extended on the powerful down, tucked on recovery.
     const dl = Math.sin(ph - ELBOW_LAG) - DOWN_BIAS * Math.sin(2 * (ph - ELBOW_LAG));
     const elbowZ = REST_ELBOW + 0.5 * dl * amp + 0.34 * Math.max(0, -drive) * amp;
     const wl = Math.sin(ph - WRIST_LAG);
@@ -333,26 +298,27 @@ export class Bird implements Updatable {
 
     for (const w of this.wings) {
       const s = w.sgn;
-      // bank: the inside wing tucks a little lower into the turn for character.
+      // The wing bones lie along ±X, so a rotation about Z raises/lowers the tip
+      // (the dihedral / flap) and a rotation about Y sweeps the wing fore/aft.
+      // Each bone bends its faired region of the ONE continuous membrane, so the
+      // wing unrolls as a single flowing skin through the whole beat.
       w.shoulder.rotation.z = s * shoulderZ + 0.14 * this.flight.roll * s;
       w.shoulder.rotation.y = s * sweep;
       w.elbow.rotation.z = s * elbowZ;
       w.wrist.rotation.z = s * wristZ;
 
-      // primary-tip spring: an underdamped chase of the wrist angle so the long
-      // outer feathers trail the hand and overshoot, then settle — the weight.
+      // primary-tip spring: the hand bone trails the wrist and overshoots, then
+      // settles — the long primaries' weight read on the continuous skin.
       const a = STIFF_K * (wristZ - w.springPos) - DAMP_C * w.springVel;
       w.springVel += a * dt;
       w.springPos += w.springVel * dt;
       if (!isFinite(w.springPos)) { w.springPos = 0; w.springVel = 0; }
-      w.fan.rotation.z = s * (w.springPos * 0.7);
-      w.fan.rotation.x = -0.05 + 0.5 * w.springVel; // feathering twist on reversal
+      w.hand.rotation.z = s * (w.springPos * 0.7);
+      w.hand.rotation.x = -0.05 + 0.5 * w.springVel; // feathering twist on reversal
     }
 
-    // --- whole-body motion: never rigid. Flap-coupled heave + a small fore/aft
-    // surge + a lateral sway + a slow idle breathing drift that persists even on a
-    // dead glide, so the mass always feels alive and carried by the air. ---
-    const idle = t * 0.9; // slow idle clock, independent of the flap energy
+    // --- whole-body motion: never rigid. ---
+    const idle = t * 0.9;
     this.bob.position.y = 0.075 * driveDown * amp - 0.028 * Math.cos(ph - BOB_LAG) * amp
       + 0.012 * Math.sin(idle * 0.8);
     this.bob.position.z = 0.035 * Math.sin(ph - 0.5) * amp;
@@ -361,50 +327,47 @@ export class Bird implements Updatable {
     this.bob.rotation.z = 0.06 * Math.sin(ph - 1.2) * amp - 0.08 * this.flight.roll;
     this.bob.rotation.y = 0.03 * Math.sin(idle * 0.5) + 0.04 * Math.sin(ph * 0.5 - 0.8) * amp;
 
-    // --- torso flex: the body skin breathes against the wingbeat. On the loaded
-    // downstroke the chest widens & the breast lifts; on recovery it stretches long
-    // and slim. A gentle non-uniform scale + a tuck/extend pitch, lagged a hair
-    // behind the wings so the flesh follows the bones. ---
+    // --- torso bone: the body breathes against the wingbeat. On the loaded
+    // downstroke the chest lifts & widens; on recovery it stretches long. A gentle
+    // non-uniform scale + a tuck/extend pitch on the torso bone, which the whole
+    // welded skin (and the bones hung off it) follows — so the flesh follows the
+    // bones without any seam opening. ---
     const flex = Math.sin(ph - 0.3);
     const breath = 0.5 + 0.5 * Math.sin(idle * 1.1);
-    this.torso.scale.set(
+    this.bTorso.scale.set(
       1 + (0.05 * driveDown + 0.012 * breath) * amp + 0.006 * breath,
       1 - 0.035 * driveDown * amp + 0.01 * breath,
       1 + 0.05 * Math.max(0, -flex) * amp,
     );
-    this.torso.rotation.x = 0.03 * flex * amp;
+    this.bTorso.rotation.x = 0.03 * flex * amp;
 
-    // --- neck: a travelling wave runs down the continuous S (each joint lags the
-    // one before it), so the neck undulates and breathes like a real supple neck.
-    // The wave persists on a glide (idle) and deepens with the flap; a slow lateral
-    // drift + bank-coupled yaw lets the head glance into turns. Keyed off each
-    // bone's stored rest angle so the S is preserved. ---
-    const n = this.neck;
+    // --- neck: a travelling wave runs down the welded S (each bone lags the one
+    // before), so the neck undulates like a real supple neck. Because the skin is
+    // weighted smoothly across these bones, it bends as one continuous surface. ---
+    const n = this.bNeck;
     for (let i = 0; i < n.length; i++) {
       const lag = i * 0.5;
       const wave = 0.05 * Math.sin(ph - lag) * amp + 0.03 * Math.sin(idle * 0.6 - lag * 0.5);
       const yaw = 0.03 * Math.sin(idle * 0.45 - lag) * (0.5 + 0.5 * (i / n.length));
-      n[i].group.rotation.x = n[i].restX + wave * (0.7 + 0.3 * (i / n.length));
-      n[i].group.rotation.y = yaw + (i >= 2 ? 0.03 * this.flight.roll : 0);
+      n[i].rotation.x = wave * (0.7 + 0.3 * (i / n.length));
+      n[i].rotation.y = yaw + (i >= 2 ? 0.03 * this.flight.roll : 0);
     }
-    this.head.rotation.x = -0.04 * Math.sin(ph - 1.9) * amp + 0.02 * Math.sin(idle * 0.9);
-    this.head.rotation.y = -0.06 * this.flight.roll + 0.025 * Math.sin(idle * 0.55); // glances into turns
-    this.head.rotation.z = 0.04 * this.flight.roll; // slight head tilt into the bank
-    this.billLower.rotation.x = 0.04 + 0.018 * driveDown; // bill cracks open under load
+    this.bHead.rotation.x = -0.04 * Math.sin(ph - 1.9) * amp + 0.02 * Math.sin(idle * 0.9);
+    this.bHead.rotation.y = -0.06 * this.flight.roll + 0.025 * Math.sin(idle * 0.55); // glances into turns
+    this.bHead.rotation.z = 0.04 * this.flight.roll; // slight head tilt into the bank
+    this.bJaw.rotation.x = 0.018 * driveDown; // bill cracks open under load
 
-    // --- tail: the biggest follow-through lag (steers + counter-balances), fanning
-    // into the bank as a rudder. ---
-    this.tail.rotation.x = -0.04 + 0.08 * Math.sin(ph - TAIL_LAG) * amp;
-    this.tail.rotation.y = -0.22 * this.flight.roll;
-    this.tail.rotation.z = 0.12 * this.flight.roll;
+    // --- tail: the biggest follow-through lag (steers + counter-balances),
+    // fanning into the bank as a rudder. The tail bone bends the rear of the welded
+    // skin + the faired tail fan. ---
+    this.bTail.rotation.x = 0.08 * Math.sin(ph - TAIL_LAG) * amp;
+    this.bTail.rotation.y = -0.22 * this.flight.roll;
+    this.bTail.rotation.z = 0.12 * this.flight.roll;
 
-    // --- trailing legs & feet: the legs stream loosely behind, dangling lower on
-    // the heave and swinging with the bank; the ankles add a second, lagged sway
-    // and the webbed feet relax/paddle gently. Each leg has its own slow phase so
-    // they're never in lockstep. ---
+    // --- trailing legs & feet ---
     for (let i = 0; i < this.legs.length; i++) {
       const { hip, ankle, sgn } = this.legs[i];
-      const lp = idle * 0.7 + i * 1.3; // per-leg slow clock
+      const lp = idle * 0.7 + i * 1.3;
       hip.rotation.x = -0.35 + 0.05 * Math.cos(ph - BOB_LAG) * amp + 0.04 * driveDown * amp
         + 0.03 * Math.sin(lp);
       hip.rotation.z = 0.16 * this.flight.roll + sgn * (0.035 * Math.sin(lp * 0.8) + 0.02);
