@@ -37,6 +37,8 @@ jobs:
       - run: pnpm build
 
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true # turn Pages ON automatically (no manual repo-settings toggle)
 
       - uses: actions/upload-pages-artifact@v3
         with:
