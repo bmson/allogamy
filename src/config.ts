@@ -32,8 +32,8 @@ export const WIND_STRENGTH = 1.1;
 export const FOG_NEAR = 200;
 export const FOG_FAR = 560;
 
-// Camera. Narrower fov → compressed, painting-like framing (cf. reference).
-export const CAM_FOV = 54;
+// Camera. Narrower fov → compressed, painting-like framing. Matches 6.html's 52°.
+export const CAM_FOV = 52;
 export const CAM_FAR = 5000;
 
 // Direction the sun comes from (also used to place the sky glow).

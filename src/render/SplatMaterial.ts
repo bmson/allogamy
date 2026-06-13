@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import {
   attribute, uv, vec2, vec3, vec4, float, smoothstep, mix, modelViewMatrix,
-  cameraProjectionMatrix, positionGeometry, time, sin, cos, fract, atan,
+  cameraProjectionMatrix, positionGeometry, time, sin, cos, fract,
 } from 'three/tsl';
 import { palette } from './palette';
 import { FOG_NEAR, FOG_FAR, WIND_STRENGTH } from '../config';
@@ -19,7 +19,11 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   // Transparent brush-stamps that BLEND at their feathered rims, but with depthWrite
   // ON and a tight near-opaque core — so dense overlapping strokes melt into a
   // continuous painted surface without ever needing a per-frame sort (cheap, and
-  // exactly how the reference achieves its soft painterly cohesion).
+  // exactly how the reference achieves its soft painterly cohesion). 6.html itself
+  // depthWrite:false + sorts every frame; our no-sort pipeline can't afford that, so
+  // we keep depthWrite ON with an alphaTest that drops the soft rim — the near-opaque
+  // dry-media cores still write clean depth, which keeps the carpet legible while the
+  // feather/bristle does the painterly blending where strokes overlap.
   mat.transparent = true;
   mat.depthWrite = true;
   mat.depthTest = true;
@@ -49,7 +53,13 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   // see-through gaps. The floor scales with depth (≈ constant pixels); near dabs
   // (small depth) keep their authored world size untouched.
   const effScale = aScale.max(depth.mul(0.003));
-  const cl = vec2(positionGeometry.x, positionGeometry.y.mul(aAspect));
+  // Mild default elongation so round dabs read as SHORT STROKES, not dots (6.html's
+  // marks are bristly little strokes). A small additive bias on the length axis:
+  // round dabs (aspect≈1) become ~1.12 — barely elongated, reads as a stroke — while
+  // blades/stems that already set a large aspect change negligibly, so flora/foliage
+  // silhouettes are preserved.
+  const lenAspect = aAspect.add(0.12);
+  const cl = vec2(positionGeometry.x, positionGeometry.y.mul(lenAspect));
   const csA = cos(aAngle);
   const snA = sin(aAngle);
   const rot = vec2(cl.x.mul(csA).sub(cl.y.mul(snA)), cl.x.mul(snA).add(cl.y.mul(csA)));
@@ -57,33 +67,35 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   const viewPos = vec4(centerView.xyz.add(vec3(corner, 0.0)), 1.0);
   mat.vertexNode = cameraProjectionMatrix.mul(viewPos);
 
-  // Irregular notched leaf-clump silhouette (matched to the reference): a tight
-  // feathered brush-stamp with a near-opaque interior and a thin painted rim that
-  // blends. The notch is keyed to a per-stamp seed hashed from world position, so
-  // no two stamps repeat and the field never reads as a grid of identical discs.
-  const p = uv().sub(vec2(0.5, 0.5)).mul(2.0); // -1..1
-  const rad = p.length();
-  const ang = atan(p.y, p.x);
-  const seed = fract(sin(aCenter.x.mul(12.9898).add(aCenter.z.mul(78.233))).mul(43758.5453)).mul(6.2831);
-  const wob = float(0.80)
-    .add(sin(ang.mul(5.0).add(seed)).mul(0.17))
-    .add(sin(ang.mul(9.0).sub(seed.mul(1.7))).mul(0.07));
-  // Softer, more melted feather (toward the reference's fuller gaussian) so dense
-  // dabs blend into continuous painted strokes rather than reading as stamps.
-  mat.opacityNode = float(1.0).sub(smoothstep(wob.sub(0.22), wob, rad));
+  // Bristly DRY-MEDIA / PENCIL dab, ported from 6.html's splatFrag (~748-765). The
+  // quad uv is already rotated by aAngle and stretched along its length in the vertex
+  // stage, so the local coordinate `r = uv*2-1` is exactly the reference's rotated,
+  // aspect-corrected `r` — r.y runs along the stroke's LENGTH. d = dot(r,r) is the
+  // squared radius; the stamp is a soft gaussian feather rather than a hard disc.
+  const r = uv().sub(vec2(0.5, 0.5)).mul(2.0); // -1..1 in the stroke's own frame
+  const seed = fract(sin(aCenter.x.mul(12.9898).add(aCenter.z.mul(78.233))).mul(43758.5453));
+  // Dry-media banding: hash bands ACROSS the stroke length (floor(r.y*6)) per stamp
+  // (floor(seed*91)) and modulate the squared radius — this is what makes a mark read
+  // as a bristly pencil/chalk stroke, not a clean blob. Exactly 6.html lines 756-757.
+  const bristle = fract(
+    sin(r.y.mul(6.0).floor().mul(127.1).add(seed.mul(91.0).floor().mul(311.7))).mul(43758.5453),
+  );
+  const d = r.dot(r).mul(float(1.0).add(bristle.sub(0.5).mul(0.2)));
 
-  // Flat painterly volume (NO fake sphere shading — the light is baked into aColor):
-  // darken toward the rim, plus a grounding shadow across the lower belly of the stamp.
-  const edge = smoothstep(wob.sub(0.30), wob, rad);
-  const belly = smoothstep(float(0.1), float(1.0), rad).mul(p.y.mul(0.5).add(0.5).clamp(0.0, 1.0));
-  const dab = float(1.0).sub(edge.mul(0.20)).mul(float(1.0).sub(belly.mul(0.22)));
+  // Fuller gaussian feather (6.html: smoothstep(1.0, 0.5, d) * 0.94). d>1 is the
+  // implicit discard; smoothstep from 1→0.5 melts the edge so dense strokes blend
+  // like drawn marks. alphaTest culls the empty rim (d≳1) so cores write clean depth.
+  mat.opacityNode = smoothstep(float(1.0), float(0.5), d).mul(0.94);
 
-  // Aerial perspective: dissolve FULLY into the cool haze with distance, so distant
-  // hills, the streaming frontier, and every stroke all end in atmosphere — never a
-  // hard edge. This dense, close haze is what unifies the palette into one painting.
-  const fogF = smoothstep(float(FOG_NEAR), float(FOG_FAR), depth);
+  // Aerial perspective, two-step like 6.html (lines 768-771): first desaturate toward
+  // grey (luminance), then wash toward the pale blue-violet aerial colour, so distant
+  // strokes dissolve into luminous airy paper rather than a hard edge or grey soup.
+  // The aerial colour matches palette.fog (= the linear value vec3(0.72,0.75,0.89)).
+  const air = smoothstep(float(FOG_NEAR), float(FOG_FAR), depth);
   const fogCol = vec3(palette.fog.r, palette.fog.g, palette.fog.b);
-  mat.colorNode = mix(aColor.mul(dab), fogCol, fogF);
+  const lum = aColor.dot(vec3(0.299, 0.587, 0.114));
+  const greyed = mix(aColor, vec3(lum, lum, lum), air.mul(0.35));
+  mat.colorNode = mix(greyed, fogCol, air.mul(0.72));
 
   return mat;
 }

@@ -16,19 +16,31 @@ export class Sky {
   constructor(scene: THREE.Scene, camera: THREE.Camera) {
     this.camera = camera;
 
-    // Dome: vertical sRGB gradient horizon → zenith.
-    const geo = new THREE.SphereGeometry(2400, 32, 20);
+    // Dome gradient ported from 6.html's skyFrag: mix(horizon, zenith) over a
+    // smoothstep(-0.12, 0.55) band of dir.y, plus a warm sun glow that pools where
+    // the view looks toward the sun. Baked per-vertex (sRGB-linear colours) so the
+    // dome is a single cheap MeshBasic draw with no custom shader. dir is the
+    // normalized vertex position (= view direction on a camera-centred sphere).
+    const geo = new THREE.SphereGeometry(2400, 48, 32);
     const n = geo.attributes.position.count;
     const col = new Float32Array(n * 3);
     const c = new THREE.Color();
+    const dir = new THREE.Vector3();
+    // Warm sun glow tint, in the same linear space as palette colours: 6.html used
+    // vec3(1.0, 0.8, 0.5) * 0.4 directly in the (linear) shader.
+    const sunGlowTint = new THREE.Color(1.0, 0.8, 0.5).multiplyScalar(0.4);
     for (let i = 0; i < n; i++) {
-      const y = geo.attributes.position.getY(i) / 2400;
-      // Bring the blue DOWN into the visible band: a thin warm horizon (for the
-      // hazed hills to dissolve into) climbs quickly to a luminous sky, so a
-      // low-angle flying view shows real gradient instead of a flat beige wall.
-      const t = THREE.MathUtils.smoothstep(y, 0.0, 0.34);
+      dir.set(
+        geo.attributes.position.getX(i),
+        geo.attributes.position.getY(i),
+        geo.attributes.position.getZ(i),
+      ).normalize();
+      const t = THREE.MathUtils.smoothstep(dir.y, -0.12, 0.55);
       c.copy(palette.skyHorizon).lerp(palette.skyZenith, t);
-      col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+      const sun = Math.pow(Math.max(dir.dot(sunDir), 0), 5);
+      col[i * 3] = c.r + sunGlowTint.r * sun;
+      col[i * 3 + 1] = c.g + sunGlowTint.g * sun;
+      col[i * 3 + 2] = c.b + sunGlowTint.b * sun;
     }
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
     const dome = new THREE.Mesh(
