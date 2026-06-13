@@ -65,9 +65,11 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   // change negligibly so flora/foliage silhouettes are preserved.
   const lenAspect = aAspect.add(uStrokeBias);
   const cl = vec2(positionGeometry.x, positionGeometry.y.mul(lenAspect));
-  // Random direction offset per stamp (esp. terrain grass, which is otherwise all
-  // aligned at angle 0) → irregular stroke directions.
-  const jAngle = aAngle.add(j2.sub(0.5).mul(uAngleJitter));
+  // Animated direction wobble: each stamp slowly oscillates its angle over time
+  // (per-stamp phase from j2 so they're decorrelated), amplitude = uAngleJitter.
+  // The strokes KEEP MOVING — living brushwork that shimmers rather than a frozen
+  // grid. (Slow speed → meditative, not frantic.)
+  const jAngle = aAngle.add(sin(time.mul(0.5).add(j2.mul(6.2831))).mul(uAngleJitter));
   const csA = cos(jAngle);
   const snA = sin(jAngle);
   const rot = vec2(cl.x.mul(csA).sub(cl.y.mul(snA)), cl.x.mul(snA).add(cl.y.mul(csA)));
