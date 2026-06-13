@@ -108,20 +108,20 @@ function foliageColor(rnd: () => number, type: TreeType, lit: number, warmth = 0
     // the wood as the deepest masses, lit tips lift a little toward teal-green.
     h = 0.35 - lit * 0.04 - warmth * 0.03 + (rnd() - 0.5) * 0.03; // deep earthy spruce
     s = 0.46 + (1 - lit) * 0.12 + rnd() * 0.06;
-    l = 0.30 + lit * 0.26 + (rnd() - 0.5) * 0.05; // lighter than the darker turf
+    l = 0.26 + lit * 0.40 + (rnd() - 0.5) * 0.05; // strong skirt-shade → lit-tip contrast
   } else if (type === 'bush') {
     // warmer, brighter yellow-greens for low foliage catching light — but pulled a
     // touch deeper/cooler than before so even ground cover separates from turf.
     h = 0.29 - lit * 0.05 - warmth * 0.04 + (rnd() - 0.5) * 0.035; // warm earthy
     s = 0.48 + (1 - lit) * 0.1 + rnd() * 0.06;
-    l = 0.36 + lit * 0.26 + warmth * 0.02 + (rnd() - 0.5) * 0.06; // lighter than turf
+    l = 0.32 + lit * 0.38 + warmth * 0.02 + (rnd() - 0.5) * 0.06; // more light/shade contrast
   } else {
     // broadleaf: deep cool emerald in shade → richer green crowns in sun, swung by
     // per-tree warmth across emerald (cool) ↔ chartreuse ↔ the odd golden turning
     // tree. Base hue sits cooler (~0.36) and lightness lower than the turf for pop.
     h = 0.31 - lit * 0.04 - warmth * 0.15 + (rnd() - 0.5) * 0.04; // WIDE per-tree hue: olive ↔ emerald ↔ blue-green
     s = 0.46 + (1 - lit) * 0.1 + warmth * 0.1 + rnd() * 0.06; // warm trees richer, cool trees softer
-    l = 0.34 + lit * 0.30 + warmth * 0.09 + (rnd() - 0.5) * 0.08; // warm lighter / cool darker → strong value variety
+    l = 0.30 + lit * 0.46 + warmth * 0.09 + (rnd() - 0.5) * 0.08; // wide top-lit→shade range = strong canopy contrast
   }
   // Golden-turning override (broadleaf/bush only): blend the whole dab toward a
   // warm autumn ochre as `golden` rises, so a handful of trees clearly turn.
@@ -629,9 +629,6 @@ export function scatterTrees(
   const fcen: number[] = [], fsc: number[] = [], fcol: number[] = [], fwd: number[] = [], fang: number[] = [], fasp: number[] = [];
   let minY = Infinity, maxY = -Infinity;
   let placed = 0;
-  // Ground shadows fall away from the sun (sun ≈ [-0.5,0.55,-0.62]).
-  const sdx = 0.627, sdz = 0.778;
-  const shadowAngle = Math.atan2(sdz, sdx); // strokes dragged along the shadow
 
   // Stamp a prototype's foliage into the chunk arrays at a transform.
   const stampFoliage = (
@@ -700,21 +697,9 @@ export function scatterTrees(
       }
       stampFoliage(proto, x, y, z, scale, cy, sy, tint);
 
-      // soft cast-shadow pool, offset & elongated away from the sun (fewer dabs)
-      const shN = 10 + Math.floor(rnd() * 8);
-      const shR = proto.canopyR * scale * 0.85;
-      const scx = x + sdx * shR * 0.7;
-      const scz = z + sdz * shR * 0.7;
-      for (let i = 0; i < shN; i++) {
-        const ang = rnd() * Math.PI * 2;
-        const rr = shR * Math.sqrt(rnd());
-        fcen.push(scx + Math.cos(ang) * rr + sdx * rr * 0.5, y + 0.35, scz + Math.sin(ang) * rr + sdz * rr * 0.5);
-        fsc.push((2.6 + rnd() * 2.6) * scale);
-        fcol.push(palette.foliageDark.r * 0.3, palette.foliageDark.g * 0.3, palette.foliageDark.b * 0.3);
-        fwd.push(0);
-        fang.push(shadowAngle + (rnd() - 0.5) * 0.5);
-        fasp.push(0.92 + rnd() * 0.22);
-      }
+      // Contact-shadow pools REMOVED: those dabs were coloured near-black
+      // (foliageDark × 0.3) and read as black spots on the ground — plus they were
+      // pure extra overdraw. The grounded foliage/weeds read fine without them.
       placed++;
     }
   }
@@ -741,19 +726,7 @@ export function scatterTrees(
       const tint = 0.92 + rnd() * 0.16;
       stampFoliage(proto, x, y, z, scale, Math.cos(yaw), Math.sin(yaw), tint);
 
-      // small ground shadow under the bush, offset from the sun (fewer dabs)
-      const bShR = proto.canopyR * scale * 0.8;
-      const bN = 3 + Math.floor(rnd() * 3);
-      for (let i = 0; i < bN; i++) {
-        const ang = rnd() * Math.PI * 2;
-        const rr = bShR * Math.sqrt(rnd());
-        fcen.push(x + sdx * bShR * 0.5 + Math.cos(ang) * rr, y + 0.25, z + sdz * bShR * 0.5 + Math.sin(ang) * rr);
-        fsc.push((1.5 + rnd() * 1.5) * scale);
-        fcol.push(palette.bushDark.r * 0.34, palette.bushDark.g * 0.34, palette.bushDark.b * 0.34);
-        fwd.push(0);
-        fang.push(shadowAngle + (rnd() - 0.5) * 0.5);
-        fasp.push(0.92 + rnd() * 0.22);
-      }
+      // Bush ground-shadow dabs REMOVED — same near-black-spot + overdraw reason.
       placed++;
     }
   }
