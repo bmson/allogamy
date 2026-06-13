@@ -149,24 +149,27 @@ export class TerrainField {
     // Damp, deep-green margins around the wet basins for richer value depth.
     out.lerp(palette.grassDeep, THREE.MathUtils.smoothstep(this.wetness(x, z), 0.45, 0.85) * 0.4);
 
-    // Dirt paths — with WORN, BROKEN-UP margins rather than a clean fill. A medium
-    // mottle scatters bare patches & damp dark pockets across the track, and a pale
-    // grit/pebble fleck rides the frayed outer rim so the edge reads as scuffed and
-    // ragged, never a painted ribbon.
+    // Water stream — the winding channel (was a dirt track) now reads as a calm
+    // blue brook nestled in its sunk bed. The colour bands run from a deep blue-
+    // green body in the centre of the channel out to paler sun-skimmed shallows
+    // toward the banks, finished with a wet dark-mud rim where it meets the turf.
+    // Gentle noise mottles the surface so it isn't a flat slab — but it's a slow,
+    // smooth ripple (low frequency), never the scuffed/gritty break-up of earth.
     if (path > 0.01) {
-      const dry = this.tN.noise(x * 0.05, z * 0.05) * 0.5 + 0.5;
-      _earth.copy(palette.pathEarth).lerp(palette.pathEarthDry, dry);
-      // mottle the bare earth so it isn't a flat slab (scuffed light/dark patches)
-      const mottle = (this.dN.noise(x * 0.09, z * 0.09) * 0.5 + 0.5 - 0.5) * 0.22;
-      _earth.offsetHSL(0, 0, mottle);
-      // Only the STRONG path core paints as bare earth — faint/worn stretches keep
-      // their green so the meadow dominates and the track reads as a thin accent
-      // ribbon (cf. the reference), not a broad beige band bleeding through the turf.
-      out.lerp(_earth, THREE.MathUtils.smoothstep(path, 0.38, 0.85));
-      // pale grit along the worn outer band (path is mid, not full), broken by noise
-      const rim = (1 - Math.abs(path - 0.55) * 3.0);
-      const grit = this.rN.noise(x * 0.12, z * 0.12) * 0.5 + 0.5;
-      if (rim > 0 && grit > 0.55) out.lerp(palette.pathPebble, rim * (grit - 0.55) * 0.8);
+      // Wet-mud rim first: a thin dark band rides the frayed outer edge of the
+      // channel (path mid, not full) where wet earth meets grass.
+      const rim = (1 - Math.abs(path - 0.42) * 3.4);
+      if (rim > 0) out.lerp(palette.waterEdge, THREE.MathUtils.clamp(rim, 0, 1) * 0.75);
+      // The channel body: shallows toward the banks deepening to the centre. A slow
+      // ripple shifts the deep/shallow mix so the surface has gentle movement of
+      // tone without reading as broken ground.
+      const ripple = this.tN.fbm(x * 0.02, z * 0.02, 2) * 0.5 + 0.5;
+      _water.copy(palette.waterShallow).lerp(palette.waterDeep, THREE.MathUtils.smoothstep(path, 0.3, 0.92));
+      // a touch of sun-skimmed sheen riding the ripple crests on the calm surface
+      if (ripple > 0.62) _water.lerp(palette.waterShallow, (ripple - 0.62) * 0.7);
+      // Only the channel proper paints as water — faint/worn stretches keep their
+      // green so the brook reads as a thin winding ribbon the meadow presses up to.
+      out.lerp(_water, THREE.MathUtils.smoothstep(path, 0.3, 0.9));
     }
 
     // Rock.
@@ -183,5 +186,5 @@ export class TerrainField {
   }
 }
 
-const _earth = new THREE.Color();
+const _water = new THREE.Color();
 const _rk = new THREE.Color();

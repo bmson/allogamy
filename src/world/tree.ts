@@ -64,27 +64,48 @@ const clamp = THREE.MathUtils.clamp;
 // shade term (the light is baked in), so no near-black dabs stick out.
 //
 // `warmth` is a per-tree personality term (−1 cool blue-green .. +1 warm
-// golden-green): it shifts the whole canopy's hue/saturation so a wood reads as
-// MANY distinct trees — some deep emerald, some sun-yellowed, the odd one turning
-// — instead of one flat green. It's set once per prototype, not per dab.
+// golden-green): it shifts the whole canopy's hue/saturation/lightness so a wood
+// reads as MANY distinct trees — deep emerald, cool blue-green, bright lime, and
+// the odd golden-turning tree — instead of one flat green. It's set once per
+// prototype (not per dab), and it now swings WIDE (see the prototype builders).
+//
+// CONTRAST: the canopy is pitched deliberately DEEPER, RICHER and COOLER than the
+// meadow turf (turf base hue ≈ 0.21–0.31, lighter & a touch less saturated) so the
+// crowns read as distinct masses against the bright chartreuse grass rather than
+// melting into it. A negative `warmth` pushes a tree cool/emerald (hue → ~0.40);
+// a strong positive `warmth` can carry a tree all the way to a golden turning
+// hue (down toward ~0.13), the rare autumn note.
 function foliageColor(rnd: () => number, type: TreeType, lit: number, warmth = 0): THREE.Color {
   let h: number, s: number, l: number;
+  // A golden-turning tree (strong positive warmth): swing hard toward amber/ochre
+  // and drop the green entirely — the rare standout in the wood.
+  const golden = Math.max(0, warmth - 0.55) / 0.45; // 0 until warmth>0.55, →1 by 1.0
   if (type === 'conifer') {
-    // deep spruce blue-green; stays cool and saturated, lit tips lift a little
-    h = 0.345 - lit * 0.05 - warmth * 0.018 + (rnd() - 0.5) * 0.025;
-    s = 0.5 + (1 - lit) * 0.12 + rnd() * 0.07;
-    l = 0.13 + lit * 0.37 + (rnd() - 0.5) * 0.06;
+    // deep spruce blue-green; stays cool, saturated and DARK so the conifers anchor
+    // the wood as the deepest masses, lit tips lift a little toward teal-green.
+    h = 0.375 - lit * 0.05 - warmth * 0.03 + (rnd() - 0.5) * 0.03;
+    s = 0.58 + (1 - lit) * 0.14 + rnd() * 0.07;
+    l = 0.10 + lit * 0.34 + (rnd() - 0.5) * 0.06;
   } else if (type === 'bush') {
-    // warmer, brighter yellow-greens for low foliage catching light
-    h = 0.30 - lit * 0.08 - warmth * 0.03 + (rnd() - 0.5) * 0.035;
-    s = 0.55 + (1 - lit) * 0.1 + rnd() * 0.07;
-    l = 0.18 + lit * 0.40 + (rnd() - 0.5) * 0.07;
+    // warmer, brighter yellow-greens for low foliage catching light — but pulled a
+    // touch deeper/cooler than before so even ground cover separates from turf.
+    h = 0.32 - lit * 0.08 - warmth * 0.04 + (rnd() - 0.5) * 0.035;
+    s = 0.6 + (1 - lit) * 0.1 + rnd() * 0.07;
+    l = 0.15 + lit * 0.40 + warmth * 0.02 + (rnd() - 0.5) * 0.07;
   } else {
-    // broadleaf: shade deep green → sunlit lime, swung by per-tree warmth so the
-    // canopy spans emerald (cool) through chartreuse to the odd golden turning tree
-    h = 0.33 - lit * 0.10 - warmth * 0.05 + (rnd() - 0.5) * 0.03;
-    s = 0.54 + (1 - lit) * 0.13 + warmth * 0.06 + rnd() * 0.06;
-    l = 0.14 + lit * 0.46 + warmth * 0.03 + (rnd() - 0.5) * 0.08;
+    // broadleaf: deep cool emerald in shade → richer green crowns in sun, swung by
+    // per-tree warmth across emerald (cool) ↔ chartreuse ↔ the odd golden turning
+    // tree. Base hue sits cooler (~0.36) and lightness lower than the turf for pop.
+    h = 0.36 - lit * 0.09 - warmth * 0.075 + (rnd() - 0.5) * 0.03;
+    s = 0.6 + (1 - lit) * 0.14 + warmth * 0.05 + rnd() * 0.06;
+    l = 0.11 + lit * 0.44 + warmth * 0.04 + (rnd() - 0.5) * 0.08;
+  }
+  // Golden-turning override (broadleaf/bush only): blend the whole dab toward a
+  // warm autumn ochre as `golden` rises, so a handful of trees clearly turn.
+  if (golden > 0 && type !== 'conifer') {
+    h = h * (1 - golden) + (0.115 + lit * 0.02) * golden; // → amber/gold
+    s = s * (1 - golden) + (0.74 + lit * 0.1) * golden;
+    l = l * (1 - golden) + (0.32 + lit * 0.28) * golden;
   }
   return _col.setHSL(clamp(h, 0, 1), clamp(s, 0, 1), clamp(l, 0.04, 0.95)).clone();
 }
@@ -274,9 +295,14 @@ function buildDeciduous(rnd: () => number): TreeProto {
   const kindRoll = rnd();
   const kind: Decid = kindRoll < 0.4 ? 'spread' : kindRoll < 0.68 ? 'tall' : kindRoll < 0.86 ? 'gnarled' : 'weeping';
 
-  // per-tree personality
+  // per-tree personality. Warmth swings WIDE so the wood spans deep cool emerald,
+  // blue-green, bright lime, and the odd golden-turning tree. Biased toward the
+  // cool/neutral half (most trees deep green), with a long warm tail: cubing a
+  // signed [-1,1] keeps the bulk near neutral while letting the rare tree reach
+  // the golden override (warmth > 0.55) — tasteful Ghibli spread, not uniform neon.
+  const wRoll = rnd() * 2 - 1; // [-1,1]
   const ch: TreeChar = {
-    warmth: (rnd() - 0.45) * 1.4, // mostly cool-to-neutral, a few warm/turning
+    warmth: clamp(wRoll * wRoll * wRoll * 0.6 + wRoll * 0.5 - 0.18, -1, 1),
     tone: rnd(),
     gnarl: kind === 'gnarled' ? 0.7 + rnd() * 0.3 : kind === 'weeping' ? 0.45 + rnd() * 0.3 : 0.2 + rnd() * 0.35,
     droop: kind === 'weeping' ? 0.4 + rnd() * 0.25 : kind === 'gnarled' ? 0.12 + rnd() * 0.12 : rnd() * 0.08,
@@ -362,8 +388,10 @@ function buildConifer(rnd: () => number): TreeProto {
   const fp: number[] = [], fs: number[] = [], fc: number[] = [], fw: number[] = [], fa: number[] = [], fasp: number[] = [];
 
   // per-tree personality: cool spruce vs. a slightly warmer fir; some spindly &
-  // tall, some squat & broad; the odd crooked, weather-bent old spire.
-  const warmth = (rnd() - 0.6) * 0.9; // conifers skew cool
+  // tall, some squat & broad; the odd crooked, weather-bent old spire. Conifers
+  // stay firmly cool (deepest masses in the wood) but spread a little wider now so
+  // the stand isn't one flat spruce-blue — never warm enough to "turn".
+  const warmth = (rnd() - 0.62) * 1.15; // skews cool, ~[-0.71, +0.44]
   const tone = rnd();
   const slender = 0.7 + rnd() * 0.6; // <1 squat .. >1 spindly
   const bent = rnd() < 0.35 ? 0.1 + rnd() * 0.12 : rnd() * 0.05;
@@ -457,7 +485,7 @@ function finalize(
  */
 function buildBush(rnd: () => number, scrub: boolean): TreeProto {
   const fp: number[] = [], fs: number[] = [], fc: number[] = [], fw: number[] = [], fa: number[] = [], fasp: number[] = [];
-  const warmth = (rnd() - 0.4) * 1.2; // bushes skew warm/bright
+  const warmth = (rnd() - 0.38) * 1.5; // bushes skew warm/bright, wider spread now (~[-0.57, +0.93])
   const R = scrub ? 1.9 + rnd() * 2.6 : 1.2 + rnd() * 1.6;
   const cy = R * (scrub ? 0.42 : 0.7); // scrub sits lower & wider
   // overlapping leafy mounds — scrub spreads into 2-5 clumps of varied size,

@@ -104,6 +104,43 @@ function fbm(x: number, y: number, z: number): number {
   return 0.66 * vnoise(x, y, z) + 0.34 * vnoise(x * 2.1 + 11, y * 2.1 + 5, z * 2.1 + 3);
 }
 
+// Where the wing roots into the back (bob-space). Declared here so the body's
+// shoulder fairing and the wing geometry agree on the exact emergence point.
+// Pulled INTO the flank (low x, on the upper flank) so the wing root is buried in
+// the body rather than perched beside it.
+export const WING_ATTACH = new THREE.Vector3(0.045, 0.18, 0.21);
+
+// ---------------------------------------------------------------------------
+// SHOULDER FAIRING — swell the body surface laterally where each wing emerges, so
+// the wing grows OUT of a fleshy shoulder shelf instead of being a card glued to a
+// smooth egg. We push body vertices that lie in the shoulder region outward along
+// ±X (and slightly up) by a smooth bump centred on the wing-attach point. Because
+// it deforms the SAME welded body skin, the wing root (buried in this swell) shares
+// the body's surface and shading — the seam at the root disappears.
+// ---------------------------------------------------------------------------
+function shoulderFairing(geo: THREE.BufferGeometry): THREE.BufferGeometry {
+  const pos = geo.attributes.position;
+  const cz = WING_ATTACH.z, cy = WING_ATTACH.y;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    // bump envelope in (z,y): broad along the back-to-breast run, centred on the
+    // shoulder height, so the swell is an elongated fleshy ridge, not a pimple.
+    const fz = Math.exp(-((z - cz) * (z - cz)) / (2 * 0.30 * 0.30));
+    const fy = Math.exp(-((y - cy) * (y - cy)) / (2 * 0.22 * 0.22));
+    const env = fz * fy;
+    if (env < 1e-3) continue;
+    const s = Math.sign(x) || 1;
+    // push the flank outward to form the shoulder shelf, and lift it a touch so the
+    // shelf rises to meet the wing root sitting on top of it.
+    const outward = 0.085 * env;
+    const lift = 0.03 * env * smoothstep(0.0, 0.12, Math.abs(x)); // only the upper flank lifts
+    pos.setXYZ(i, x + s * outward, y + lift, z);
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  return geo;
+}
+
 /** Push every vertex along its normal by layered noise for organic softness. */
 function roughen(geo: THREE.BufferGeometry, amp: number, freq: number, biasDown = 0): THREE.BufferGeometry {
   if (!geo.attributes.normal) geo.computeVertexNormals();
@@ -197,11 +234,15 @@ const S = (
 function bodySpine(): Station[] {
   return [
     // ---- tail (grows straight out of the rump, low and trailing) ----
-    S(new THREE.Vector3(0, 0.05, -1.28), 0.015, 0.012, 0, BONE.TAIL),
-    S(new THREE.Vector3(0, 0.055, -1.16), 0.05, 0.022, 0, BONE.TAIL, 0.5),
-    S(new THREE.Vector3(0, 0.05, -1.0), 0.075, 0.05, 0.1, BONE.TAIL, 1.0),
+    // The rump is kept fleshy and broad right up to where the tail fan roots, so
+    // the fan springs from a solid base of body rather than off a thin spike — no
+    // gap opens between rump and rectrices. The TAIL ring radii stay generous and
+    // ease (not collapse) toward the fan root.
+    S(new THREE.Vector3(0, 0.052, -1.18), 0.052, 0.03, 0.05, BONE.TAIL),
+    S(new THREE.Vector3(0, 0.052, -1.06), 0.086, 0.058, 0.12, BONE.TAIL, 0.5),
+    S(new THREE.Vector3(0, 0.05, -0.95), 0.108, 0.082, 0.2, BONE.TAIL, 1.0), // rump shoulder (fan springs here)
     // ---- body teardrop ----
-    S(new THREE.Vector3(0, 0.03, -0.82), 0.12, 0.12, 0.2, BONE.BODY, 0.0),
+    S(new THREE.Vector3(0, 0.04, -0.82), 0.14, 0.13, 0.28, BONE.BODY, 0.0),
     S(new THREE.Vector3(0, -0.01, -0.5), 0.2, 0.215, 0.4, BONE.BODY),
     S(new THREE.Vector3(0, -0.02, -0.12), 0.238, 0.262, 0.48, BONE.BODY), // heaviest belly
     S(new THREE.Vector3(0, 0.0, 0.22), 0.218, 0.238, 0.42, BONE.BODY), // breast
@@ -351,7 +392,9 @@ function sweepBodySkin(stations: Station[]): SweptSkin {
   // ring: torso pivots at the belly centre, tail at the rump (so it swings like a
   // rudder from the body, not from its own tip), neck/head/jaw at their joints.
   const boneRest: THREE.Vector3[] = new Array(BONE.COUNT);
-  boneRest[BONE.TAIL] = new THREE.Vector3(0, 0.04, -0.92); // rump joint
+  // The tail bone pivots at the actual rump joint — where body flesh meets the
+  // fan root — so the whole rump+fan swings from the body and never detaches.
+  boneRest[BONE.TAIL] = new THREE.Vector3(0, 0.045, -0.86); // rump joint (at the fan root)
   boneRest[BONE.BODY] = new THREE.Vector3(0, -0.02, -0.12); // belly centre
   boneRest[BONE.NECK0] = new THREE.Vector3(0, 0.18, 0.73); // shoulder/neck root
   boneRest[BONE.NECK1] = new THREE.Vector3(0, 0.42, 0.7);
@@ -458,10 +501,16 @@ function buildLowerJawSkin(): { geo: THREE.BufferGeometry } {
 // are longest. The leading edge sinks inside the rump rings so there's no seam.
 const TAIL_FEATHERS = 7;
 function buildTailFanSkin(): THREE.BufferGeometry {
-  const NSPAN = TAIL_FEATHERS * 4 + 1, NCHORD = 6;
+  // Add an extra chord row at the very root (v<0) that is BURIED INSIDE the rump
+  // rings: it is wide, fat-thick and forward of the body's rump surface, so the
+  // fan's leading edge merges into the body skin with no visible gap or seam. The
+  // fan then fans out from there into the overlapping rectrices.
+  const NSPAN = TAIL_FEATHERS * 4 + 1, NCHORD = 7;
   const halfSpan = 0.26, len = 0.62;
   const top: number[] = [], bot: number[] = [];
-  const rootZ = -0.96; // tucks inside the rump rings
+  // Root well INSIDE the rump (the rump rings reach back to z≈-1.06); the fan's
+  // first row sits at z≈-0.86, deep in the body, so it grows out of the flesh.
+  const rootZ = -0.86;
   for (let i = 0; i < NSPAN; i++) {
     const u = (i / (NSPAN - 1)) * 2 - 1; // -1..1 across the span
     const x = u * halfSpan;
@@ -472,13 +521,21 @@ function buildTailFanSkin(): THREE.BufferGeometry {
     const lift = 0.025 + 0.04 * Math.abs(u); // outer feathers lift (dihedral)
     // alternate feathers ride slightly above/below for an overlapped read
     const stagger = 0.012 * Math.sin(u * Math.PI * TAIL_FEATHERS);
+    // the root half-span narrows so the buried leading edge fits inside the rump
+    const rootPinch = 0.62; // chord-0 row sits within the rump silhouette laterally
     for (let j = 0; j < NCHORD; j++) {
       const v = j / (NCHORD - 1);
-      const z = rootZ - reach * v;
-      const th = (0.016 * (1 - v) + 0.0022) * (1 - 0.35 * Math.abs(u));
+      const buried = smoothstep(0.2, 0.0, v); // 1 at root row → 0 by 20% chord
+      // root row tucked FORWARD into the rump (buried*0.16 ahead of rootZ) so its
+      // leading edge sinks inside the body rings; the fan then reaches aft from there.
+      const z = rootZ - reach * v + buried * 0.16;
+      const xx = x * lerp(1, rootPinch, buried); // narrow the buried root laterally
+      // fatten the buried root in thickness so it fills the body silhouette (meets
+      // the rump skin) and tapers to thin feather membrane out at the fan tips.
+      const th = (0.016 * (1 - v) + 0.0022) * (1 - 0.35 * Math.abs(u)) + buried * 0.055;
       const y = 0.05 + lift * v * v + stagger * v;
-      top.push(x, y + th, z);
-      bot.push(x, y - th, z);
+      top.push(xx, y + th, z);
+      bot.push(xx, y - th, z);
     }
   }
   const g = membraneFromGrids(top, bot, NSPAN, NCHORD);
@@ -557,6 +614,9 @@ export interface BodyBuild {
 export function buildBodySkin(): BodyBuild {
   const stations = bodySpine();
   const { geo: bodyGeo, boneRest } = sweepBodySkin(stations);
+  // swell the shoulders so each wing grows out of a fleshy shelf of body, then add
+  // the fine organic noise. Order matters: fair first, then roughen over the result.
+  shoulderFairing(bodyGeo);
   roughen(bodyGeo, 0.01, 9, 0.4);
 
   const jaw = buildLowerJawSkin().geo;
@@ -628,10 +688,8 @@ export const WBONE = { SHOULDER: 0, ELBOW: 1, WRIST: 2, HAND: 3, COUNT: 4 } as c
 export const WING_JOINTS = [0.0, 0.5, 0.94, 1.28]; // shoulder, elbow, wrist, hand-root
 export const WING_TIP = 1.78; // primaries reach to here
 
-// Where the wing roots into the back (bob-space). Baked into the wing geometry so
-// the membrane root sits on the shoulder/back; the shoulder bone is placed here too
-// so the bone pivots coincide exactly with the geometry's spanwise joints.
-export const WING_ATTACH = new THREE.Vector3(0.05, 0.16, 0.2);
+// (WING_ATTACH is declared near the shoulder-fairing helper above, so the body
+// swell and the wing geometry agree on the exact emergence point.)
 
 // number of distinct primary "fingers" cut into the wingtip's trailing edge.
 const WING_PRIMARIES = 6;
@@ -663,16 +721,24 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
     const t = i / (NSPAN - 1); // 0 root → 1 tip
     const xspan = t * WING_TIP;
     const x = side * xspan;
-    // chord (fore-aft depth): broad at the arm, tapering to slim primaries
-    const chord = lerp(0.6, 0.12, smoothstep(0.0, 1.0, t)) * (1 - 0.18 * smoothstep(0.7, 1.0, t));
+    // chord (fore-aft depth): broad at the arm, tapering to slim primaries. The
+    // root chord is broadened further (rootFair) so the membrane fairs into the
+    // body as a wide fillet rather than a narrow blade.
+    const rootFair0 = smoothstep(0.22, 0.0, t);
+    const chord = lerp(0.6, 0.12, smoothstep(0.0, 1.0, t)) * (1 - 0.18 * smoothstep(0.7, 1.0, t))
+      * (1 + 0.55 * rootFair0);
     const thick = lerp(0.05, 0.006, t);
     // leading edge sweeps back & bows forward (a smooth curve)
     const le = lerp(0.2, -0.18, t) + 0.05 * Math.sin(t * Math.PI);
     // whole-wing droop + gull bow at the tip
     const droopBase = -0.05 * t * t;
-    // ROOT FAIRING: at the very root, lift the membrane up to the back line and
-    // shrink chord so it tucks into the body silhouette (no card sticking out).
-    const rootFair = smoothstep(0.12, 0.0, t); // 1 at root → 0 by 12% span
+    // ROOT FAIRING: blend the inner membrane INTO the shoulder shelf of the body.
+    // Over the inner ~22% of span the root is pulled toward the body centre-line,
+    // its chord broadened (above), and its surface sunk down/forward into the flank
+    // — so it disappears into the body swell (a continuous fillet) instead of
+    // meeting the body at a hard card edge. `rootFair` ramps 1 → 0 by 22% span.
+    const rootFair = rootFair0;
+    const rootFair2 = rootFair * rootFair; // sharper falloff for the deepest burial
     const [bA, bB, wB] = weightAt(xspan);
     // TRAILING EDGE as feathers:
     //  - inner wing (secondaries): a fine shallow scallop, one notch per feather
@@ -694,14 +760,21 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
       const th = thick * thFactor * (0.4 + 0.6 * camberShape);
       const camber = 0.55 * thick * camberShape * (1 - 0.3 * t);
       let y = camber + droopBase - 0.02 * v * t;
-      // fair the root DOWN & forward so it sinks into the back/flank silhouette
-      // (the membrane disappears into the body rather than meeting it at a hard
-      // line). The attachment offset is baked in so the root sits on the shoulder.
-      y += -rootFair * 0.06;
-      const zr = z + rootFair * 0.14;
+      // fair the root DOWN into the flank so the membrane sinks into the shoulder
+      // shelf of the body (it disappears into the swell rather than meeting it at a
+      // hard line). The deepest root row drops most, easing out across the fillet.
+      y += -rootFair * 0.05 - rootFair2 * 0.05;
+      // and curl the root edges down a touch (chord-wise) so the fillet wraps the
+      // flank instead of poking out as a flat shelf.
+      y += -rootFair2 * 0.03 * (v - 0.5) * 2;
+      const zr = z + rootFair * 0.12;
+      // pull the root spanwise X toward the body centre-line so it tucks under the
+      // shoulder swell (xFair → 1 keeps tip X, → small at root sinks it inboard).
+      const xFair = 1 - 0.5 * rootFair2;
+      const xx = WING_ATTACH.x * side + x * xFair;
       // bake the body attachment so bone pivots == geometry joints in span-X
-      top.push(WING_ATTACH.x * side + x, WING_ATTACH.y + y + th, WING_ATTACH.z + zr);
-      bot.push(WING_ATTACH.x * side + x, WING_ATTACH.y + y - th * 0.7, WING_ATTACH.z + zr);
+      top.push(xx, WING_ATTACH.y + y + th, WING_ATTACH.z + zr);
+      bot.push(xx, WING_ATTACH.y + y - th * 0.7, WING_ATTACH.z + zr);
       // skin weights (same for top & bottom vertex of this station/chord)
       skinIdx.push(bA, bB, 0, 0); skinWgt.push(1 - wB, wB, 0, 0);
     }
@@ -726,6 +799,13 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
     const primary = smoothstep(0.4, 0.95, Math.max(tspan, trail01 * 0.6));
     const base = C_COVERT.clone().lerp(C_PRIMARY, primary);
     c.copy(C_COVERT_LOW).lerp(base, smoothstep(0.25, 0.7, top01));
+    // at the buried root the wing shares the body's colour, so the fairing reads as
+    // body skin flowing into wing rather than a coloured flap stuck on the flank.
+    const rootBlend = smoothstep(0.1, 0.0, tspan); // 1 at root → 0 by 10% span
+    if (rootBlend > 0) {
+      const bodyHere = C_BODY.clone().lerp(C_BODY_TOP, smoothstep(0.4, 0.95, top01));
+      c.lerp(bodyHere, rootBlend * 0.85);
+    }
 
     // --- secondary covert rows: gentle chordwise feather bands across the inner
     // wing (rows of overlapping coverts) — light shaft, shadow at each overlap ---

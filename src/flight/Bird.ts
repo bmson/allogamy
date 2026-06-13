@@ -87,6 +87,13 @@ export class Bird implements Updatable {
   private wings: Wing[] = [];
   private phase = 0;
   private flapEnergy = 0;
+  // eased body-morph state: the supple form lags the controller a touch, so the
+  // creature pours into a bank / arcs through a climb with weighty follow-through
+  // instead of snapping. These are smoothed each frame toward flight.roll/pitch.
+  private morphRoll = 0;
+  private morphPitch = 0;
+  private morphRollVel = 0; // for an extra overshoot on the leading bend
+  private bankRate = 0; // d(roll)/dt, smoothed — drives "lean into the new turn"
 
   constructor(scene: THREE.Scene, flight: FlightController) {
     this.flight = flight;
@@ -277,6 +284,24 @@ export class Bird implements Updatable {
     this.phase += TAU * FLAP_FREQ * dt;
     const ph = this.phase;
 
+    // --- eased body-morph drivers: a supple creature pours into the bank and arcs
+    // through the climb/dive with weight, lagging the (already-eased) controller so
+    // the FORM follows the intent a beat behind. The whole welded spine bows to
+    // these via its bone chain, so the surface reshapes seamlessly (no joint gap). ---
+    const kRoll = 1 - Math.exp(-dt * 4.0);
+    const kPitch = 1 - Math.exp(-dt * 3.2);
+    const prevMorphRoll = this.morphRoll;
+    this.morphRoll += (this.flight.roll - this.morphRoll) * kRoll;
+    this.morphPitch += (this.flight.pitch - this.morphPitch) * kPitch;
+    // rate of bank (smoothed) — the body leans harder while *entering* a turn
+    const rawRate = dt > 1e-5 ? (this.morphRoll - prevMorphRoll) / dt : 0;
+    this.bankRate += (rawRate - this.bankRate) * (1 - Math.exp(-dt * 3.0));
+    // a touch of velocity-spring on the lateral bend for organic overshoot
+    this.morphRollVel += (this.bankRate * 0.18 - this.morphRollVel) * (1 - Math.exp(-dt * 5.0));
+    const mRoll = this.morphRoll;   // lateral (X) body-arc driver  (±~0.62)
+    const mPitch = this.morphPitch; // vertical (Y) body-arc driver (±~0.42)
+    const lead = clamp(this.morphRollVel, -0.5, 0.5); // extra lean entering a turn
+
     // --- glide vs. flap: mostly soaring, occasionally a run of deep beats ---
     const wantClimb = clamp(this.flight.pitch, 0, 0.42) / 0.42;
     const cycleGate = smooth01(Math.sin(TAU * 0.05 * t) + 0.25);
@@ -302,9 +327,13 @@ export class Bird implements Updatable {
       // (the dihedral / flap) and a rotation about Y sweeps the wing fore/aft.
       // Each bone bends its faired region of the ONE continuous membrane, so the
       // wing unrolls as a single flowing skin through the whole beat.
-      w.shoulder.rotation.z = s * shoulderZ + 0.14 * this.flight.roll * s;
-      w.shoulder.rotation.y = s * sweep;
-      w.elbow.rotation.z = s * elbowZ;
+      // Banking gesture: the inner wing of the turn drops/tucks and the outer wing
+      // lifts & reaches, so the wings morph asymmetrically WITH the banking body
+      // (the dihedral asymmetry that makes a real bird's bank read).
+      const bankWing = mRoll * s; // >0 on the wing toward which we roll
+      w.shoulder.rotation.z = s * shoulderZ + 0.16 * bankWing;
+      w.shoulder.rotation.y = s * sweep - 0.06 * bankWing; // inner wing sweeps back a touch
+      w.elbow.rotation.z = s * elbowZ + 0.10 * bankWing;   // inner wing flexes (shorter span)
       w.wrist.rotation.z = s * wristZ;
 
       // primary-tip spring: the hand bone trails the wrist and overshoots, then
@@ -317,52 +346,99 @@ export class Bird implements Updatable {
       w.hand.rotation.x = -0.05 + 0.5 * w.springVel; // feathering twist on reversal
     }
 
-    // --- whole-body motion: never rigid. ---
+    // --- whole-body motion: never rigid. `bob` carries the body AND both wings as
+    // one unit, so leaning/arcing it reshapes the whole creature with ZERO seam risk
+    // at the shoulders. This is where the strongest X (lateral) and Y (vertical)
+    // body morph lives: the bird slips inboard and banks its whole mass into a turn,
+    // and rises/sinks and tips through climbs and dives — a living arc, not a slide. ---
     const idle = t * 0.9;
     this.bob.position.y = 0.075 * driveDown * amp - 0.028 * Math.cos(ph - BOB_LAG) * amp
-      + 0.012 * Math.sin(idle * 0.8);
+      + 0.012 * Math.sin(idle * 0.8)
+      + 0.05 * mPitch;                                  // whole mass rises in a climb
     this.bob.position.z = 0.035 * Math.sin(ph - 0.5) * amp;
-    this.bob.position.x = 0.02 * Math.sin(idle * 0.6) - 0.03 * this.flight.roll;
-    this.bob.rotation.x = 0.05 * Math.sin(ph - 0.35) * amp + 0.02 * Math.sin(idle * 0.7);
-    this.bob.rotation.z = 0.06 * Math.sin(ph - 1.2) * amp - 0.08 * this.flight.roll;
-    this.bob.rotation.y = 0.03 * Math.sin(idle * 0.5) + 0.04 * Math.sin(ph * 0.5 - 0.8) * amp;
+    // slip the whole body INBOARD of the turn (banking birds carve toward the inside)
+    this.bob.position.x = 0.02 * Math.sin(idle * 0.6) - 0.06 * mRoll - 0.04 * lead;
+    // tip the whole creature head-up/down through climbs & dives (Y-axis arc), with
+    // a gentle wingbeat porpoise and idle drift layered in.
+    this.bob.rotation.x = 0.05 * Math.sin(ph - 0.35) * amp + 0.02 * Math.sin(idle * 0.7)
+      + 0.12 * mPitch;
+    // the body's roll EASES behind the root's hard bank (a slight counter-roll that
+    // lags the frame), then the leading-edge term lets it surge as it enters a turn
+    // and settle after — so the bank reads weighty and alive, not rigidly locked.
+    this.bob.rotation.z = 0.06 * Math.sin(ph - 1.2) * amp - 0.10 * mRoll + 0.06 * lead;
+    // yaw the whole body into the new heading a touch (the body leads the turn).
+    this.bob.rotation.y = 0.03 * Math.sin(idle * 0.5) + 0.04 * Math.sin(ph * 0.5 - 0.8) * amp
+      + 0.05 * mRoll;
 
-    // --- torso bone: the body breathes against the wingbeat. On the loaded
-    // downstroke the chest lifts & widens; on recovery it stretches long. A gentle
-    // non-uniform scale + a tuck/extend pitch on the torso bone, which the whole
-    // welded skin (and the bones hung off it) follows — so the flesh follows the
-    // bones without any seam opening. ---
+    // --- torso bone: the body breathes against the wingbeat AND arcs with flight.
+    // On the loaded downstroke the chest lifts & widens; on recovery it stretches
+    // long. Layered on top: an ORGANIC squash/stretch that pulses on a slow idle
+    // breath, a VERTICAL arc from pitch (climb → chest tips up, dive → tips down),
+    // and a LATERAL lean from the bank. A gentle non-uniform scale + a 3-axis bend
+    // on the torso bone, which the whole welded skin (and every bone hung off it)
+    // follows — so the flesh reshapes with the bones without any seam opening. ---
     const flex = Math.sin(ph - 0.3);
     const breath = 0.5 + 0.5 * Math.sin(idle * 1.1);
+    const breath2 = 0.5 + 0.5 * Math.sin(idle * 0.63 + 1.7); // a second slower swell
+    // organic squash/stretch: belly fills & flank widens on the breath/downstroke,
+    // body lengthens on the recovery. Small, supple, always alive.
+    const fill = 0.05 * driveDown * amp + 0.018 * breath + 0.01 * breath2;
+    const lengthen = 0.05 * Math.max(0, -flex) * amp + 0.012 * breath2;
     this.bTorso.scale.set(
-      1 + (0.05 * driveDown + 0.012 * breath) * amp + 0.006 * breath,
-      1 - 0.035 * driveDown * amp + 0.01 * breath,
-      1 + 0.05 * Math.max(0, -flex) * amp,
+      1 + fill + 0.006 * breath,            // widen (X)
+      1 - 0.5 * fill + 0.012 * breath,      // flatten as it widens (Y) — volume-ish
+      1 + lengthen,                          // stretch fore-aft on recovery (Z)
     );
-    this.bTorso.rotation.x = 0.03 * flex * amp;
+    // The torso bone moves the body skin RELATIVE to the wing meshes (the wings
+    // live under `bob`, not under this bone), so its arc is kept GENTLE — just
+    // enough belly/chest flex to feel supple — while the big lateral/vertical body
+    // arcs are carried either by `bob` (which moves body + wings together) or by the
+    // tail/neck chains (extremities, far from the shoulders). This keeps the welded
+    // shoulder fairing locked to the wing root: no gap opens as the body morphs.
+    this.bTorso.rotation.x = 0.03 * flex * amp        // wingbeat tuck/extend
+      + 0.08 * mPitch                                 // mild chest tip with climb/dive
+      + 0.02 * Math.sin(idle * 0.7);                  // idle drift
+    this.bTorso.rotation.y = 0.04 * mRoll + 0.04 * lead; // mild waist yaw into the turn
+    this.bTorso.rotation.z = -0.03 * mRoll;            // subtle waist roll-with-bank
 
     // --- neck: a travelling wave runs down the welded S (each bone lags the one
     // before), so the neck undulates like a real supple neck. Because the skin is
-    // weighted smoothly across these bones, it bends as one continuous surface. ---
+    // weighted smoothly across these bones, it bends as one continuous surface.
+    // The neck also CONTINUES the body's lateral arc — each bone curving a little
+    // more into the turn so the front half of the creature sweeps into the bank,
+    // and counter-bends vertically against the torso so a climb arcs the body into
+    // a gentle C. The cumulative bend is spread thinly across four joints, keeping
+    // the welded surface smooth (no kink). ---
     const n = this.bNeck;
-    for (let i = 0; i < n.length; i++) {
+    const nLen = n.length;
+    for (let i = 0; i < nLen; i++) {
       const lag = i * 0.5;
+      const f = (i + 1) / nLen; // 0..1 outward along the neck
       const wave = 0.05 * Math.sin(ph - lag) * amp + 0.03 * Math.sin(idle * 0.6 - lag * 0.5);
-      const yaw = 0.03 * Math.sin(idle * 0.45 - lag) * (0.5 + 0.5 * (i / n.length));
-      n[i].rotation.x = wave * (0.7 + 0.3 * (i / n.length));
-      n[i].rotation.y = yaw + (i >= 2 ? 0.03 * this.flight.roll : 0);
+      const yaw = 0.03 * Math.sin(idle * 0.45 - lag) * (0.5 + 0.5 * f);
+      // vertical arc: neck eases the opposite way to the chest-tip so climb/dive
+      // bows the whole body smoothly rather than rigidly tipping the head.
+      n[i].rotation.x = wave * (0.7 + 0.3 * f) - 0.05 * mPitch * f;
+      // lateral arc: progressively curve the neck into the turn (front half sweeps in)
+      n[i].rotation.y = yaw + 0.07 * mRoll * f + 0.03 * lead * f;
+      // a touch of axial roll so the neck banks with the body (no twisting seam)
+      n[i].rotation.z = -0.03 * mRoll * f;
     }
-    this.bHead.rotation.x = -0.04 * Math.sin(ph - 1.9) * amp + 0.02 * Math.sin(idle * 0.9);
-    this.bHead.rotation.y = -0.06 * this.flight.roll + 0.025 * Math.sin(idle * 0.55); // glances into turns
-    this.bHead.rotation.z = 0.04 * this.flight.roll; // slight head tilt into the bank
+    this.bHead.rotation.x = -0.04 * Math.sin(ph - 1.9) * amp + 0.02 * Math.sin(idle * 0.9)
+      - 0.06 * mPitch;                                   // head holds level-ish through the arc
+    this.bHead.rotation.y = -0.06 * mRoll + 0.025 * Math.sin(idle * 0.55); // glances into turns
+    this.bHead.rotation.z = 0.05 * mRoll; // slight head tilt into the bank
     this.bJaw.rotation.x = 0.018 * driveDown; // bill cracks open under load
 
-    // --- tail: the biggest follow-through lag (steers + counter-balances),
-    // fanning into the bank as a rudder. The tail bone bends the rear of the welded
-    // skin + the faired tail fan. ---
-    this.bTail.rotation.x = 0.08 * Math.sin(ph - TAIL_LAG) * amp;
-    this.bTail.rotation.y = -0.22 * this.flight.roll;
-    this.bTail.rotation.z = 0.12 * this.flight.roll;
+    // --- tail: the rear extremity, with the biggest follow-through lag (steers +
+    // counter-balances), fanning into the bank as a rudder and completing the body
+    // arc at the back. The tail bone now pivots at the actual rump joint and bends
+    // the rear of the welded skin + the rump tube + the faired tail fan AS ONE — so
+    // the fan springs from the body and follows it without detaching. ---
+    this.bTail.rotation.x = 0.08 * Math.sin(ph - TAIL_LAG) * amp
+      + 0.22 * mPitch;                                   // VERTICAL arc: tail lifts in a climb (body bows into a C)
+    this.bTail.rotation.y = -0.26 * mRoll - 0.06 * lead; // swing/fan into the turn (rudder)
+    this.bTail.rotation.z = 0.14 * mRoll;                // bank the fan with the body
 
     // --- trailing legs & feet ---
     for (let i = 0; i < this.legs.length; i++) {
@@ -370,7 +446,7 @@ export class Bird implements Updatable {
       const lp = idle * 0.7 + i * 1.3;
       hip.rotation.x = -0.35 + 0.05 * Math.cos(ph - BOB_LAG) * amp + 0.04 * driveDown * amp
         + 0.03 * Math.sin(lp);
-      hip.rotation.z = 0.16 * this.flight.roll + sgn * (0.035 * Math.sin(lp * 0.8) + 0.02);
+      hip.rotation.z = 0.16 * mRoll + sgn * (0.035 * Math.sin(lp * 0.8) + 0.02);
       ankle.rotation.x = 0.5 + 0.09 * Math.sin(lp - 0.7) + 0.05 * driveDown * amp;
       ankle.rotation.y = sgn * 0.05 * Math.sin(lp * 0.9 + 0.5);
       ankle.rotation.z = sgn * 0.04 * Math.sin(lp * 0.6);

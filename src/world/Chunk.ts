@@ -156,17 +156,15 @@ export class Chunk {
       let yoff = 0.4 + rnd() * 1.0;
 
       const grassy = path < 0.3 && rock < 0.4;
-      // Wild transition: the grass/path boundary is never a clean line. In the worn
-      // margin (the frayed band where some path bleeds into grass) we occasionally
-      // override one read with the other — bare grit creeps into the turf and grass
-      // tufts push onto the track — so the edge reads ragged and broken-up.
+      // The grass/water boundary is never a clean line. In the frayed margin band a
+      // few turf dabs read instead as wet mud — the soggy, broken shoreline where
+      // the brook laps the meadow — so the bank reads ragged, not a drawn outline.
       const margin = path > 0.08 && path < 0.34; // the frayed transition band
-      const bareInGrass = grassy && margin && rnd() < 0.3;
-      // Grass crowds the track hard (the reference's path is a thin accent the
-      // meadow presses right up to) — so most of a faint path still reads green.
-      const grassOnPath = !grassy && path < 0.7 && rock < 0.4 && rnd() < 0.5;
+      const wetEdge = grassy && margin && rnd() < 0.35;
+      // The channel itself (strong path, not rock) reads as calm water surface.
+      const watery = !grassy && rock < 0.4;
 
-      if (grassy && !bareInGrass) {
+      if (grassy && !wetEdge) {
         if (rnd() < 0.03) {
           // a pale weathered stone / pebble nestled in the turf — stone variety
           // scattered across the meadow (cf. the reference), not just on rock faces.
@@ -188,7 +186,9 @@ export class Chunk {
           // hot-lime dry patches, occasional deep-shadow pockets. Light is baked
           // into lightness here (do NOT also multiply by shade).
           const tint = field.tint(x, z) * 0.5 + 0.5;
-          let h = 0.31 - lit * 0.1 + (tint - 0.5) * 0.05;
+          // Hue pulled a hair WARMER than the canopy (which is now cooler/deeper) so
+          // the meadow and the tree masses separate cleanly in both hue and value.
+          let h = 0.295 - lit * 0.1 + (tint - 0.5) * 0.05;
           // LUSH painted meadow (matched to the reference): a saturated verdant
           // carpet with a WIDE value range — bright sunlit lime crowns against deep
           // blue-green shadow pockets — which is what gives the turf its depth and
@@ -207,28 +207,32 @@ export class Chunk {
           yoff = 0.5 + rnd() * 1.1;
           wind = 0.4 + rnd() * 0.15;
         }
-      } else if (grassOnPath) {
-        // a ragged grass tuft pushing out onto the worn track — frayed encroachment.
-        // A slightly drier, dustier turf so it reads as scrappy verge growth, and a
-        // taller upright blade-ish dab that catches the wind.
-        const h = 0.29 - lit * 0.1;
-        const s = 0.56 + (1 - lit) * 0.1;
-        let l = THREE.MathUtils.clamp(0.17 + lit * 0.42 + (rnd() - 0.5) * 0.09, 0.05, 0.95);
-        if (rnd() < 0.2) l *= 0.55; // shade pockets, like the turf
-        cc.setHSL(h, THREE.MathUtils.clamp(s, 0, 1), l);
-        scale = 0.8 + rnd() * 0.9;
-        yoff = 0.4 + rnd() * 0.9;
-        wind = 0.45 + rnd() * 0.2;
-        aspect = 1.3 + rnd() * 0.8; // upright blade
+      } else if (watery) {
+        // Calm water surface of the stream channel. mixColor now paints the channel
+        // in water tones (deep blue-green centre → pale shallows toward the banks);
+        // we keep these dabs STILL (wind = 0 → no sway/wave), low and flat-hugging
+        // the sunk bed, round and smooth — NO leafy blade treatment — so the brook
+        // reads as a calm, glassy ribbon rather than swaying vegetation. A faint
+        // sun-skimmed sheen lifts a few dabs so the surface isn't a flat slab.
+        field.mixColor(x, z, y, slope, path, rock, cc);
+        const sheen = THREE.MathUtils.clamp(0.86 + 0.22 * ndotl, 0.74, 1.12);
+        cc.multiplyScalar(sheen);
+        if (rnd() < 0.1) cc.lerp(palette.waterShallow, 0.3 + rnd() * 0.3); // glints
+        scale = 1.0 + rnd() * 0.9; // broad, flat surface dabs
+        yoff = 0.12 + rnd() * 0.28; // sits low on the water, in the sunk channel
+        wind = 0; // calm/still — water must not wave
+        angle = rnd() * Math.PI;
+        aspect = 0.9 + rnd() * 0.3; // round, never blade-ish
       } else {
-        // bare ground: dirt/pebble dabs (mixColor tints them), shaded by sun. In the
-        // grass margin (bareInGrass) this is worn earth/grit creeping INTO the turf.
+        // The wet shoreline (wetEdge): soggy dark mud where the brook meets the
+        // turf — and, off the channel, the rare bare rock dab. Either way STILL.
         field.mixColor(x, z, y, slope, path, rock, cc);
         const shade = THREE.MathUtils.clamp(0.62 + 0.5 * ndotl, 0.5, 1.12);
         if (rnd() < 0.12) cc.copy(palette.rock).lerp(palette.rockShadow, rnd());
-        else if (bareInGrass && rnd() < 0.5) cc.copy(palette.pathPebble).lerp(palette.pathEarthDry, rnd()); // pale grit fleck
+        else if (wetEdge) cc.copy(palette.waterEdge).lerp(palette.waterDeep, rnd() * 0.4); // wet-mud / damp shore fleck
         cc.multiplyScalar(shade);
-        scale = bareInGrass ? 0.6 + rnd() * 0.6 : 0.9 + rnd() * 0.8;
+        scale = wetEdge ? 0.6 + rnd() * 0.6 : 0.9 + rnd() * 0.8;
+        yoff = wetEdge ? 0.18 + rnd() * 0.3 : yoff; // shore mud hugs the ground
         wind = 0;
         aspect = 0.95 + rnd() * 0.2;
       }
