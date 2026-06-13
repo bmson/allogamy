@@ -25,7 +25,7 @@ export const SPLATS_PER_CHUNK = 22000;
 export const SPLAT_DENSITY = 1.0;
 
 // Wind sway strength (world units), scaled per-instance by aWind.
-export const WIND_STRENGTH = 1.1;
+export const WIND_STRENGTH = 1.7;
 
 // Fog hides the streaming frontier: new chunks are born beyond FOG_FAR (inside
 // the haze) and never visibly pop in. LOAD_RADIUS*CHUNK_SIZE must exceed FOG_FAR.
@@ -36,7 +36,7 @@ export const WIND_STRENGTH = 1.1;
 // Fog effectively REMOVED — pushed far beyond the ~800 m loaded world so nothing
 // in view is hazed (bright, clear, happy day). Re-add via the panel's fog sliders
 // or by lowering these. (The splat aerial wash + scene.fog both read these.)
-export const FOG_NEAR = 1500;
+export const FOG_NEAR = 1580;
 export const FOG_FAR = 3000;
 
 // Camera. Narrower fov → compressed, painting-like framing. Matches 6.html's 52°.

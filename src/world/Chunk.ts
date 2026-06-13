@@ -198,11 +198,11 @@ export class Chunk {
           // blue-green shadow pockets — which is what gives the turf its depth and
           // stops it reading as flat pale fuzz over bare ground.
           let s = 0.46 + (1 - lit) * 0.08 + tint * 0.04; // EARTHY moderate sat — olive, not candy, not mud
-          let l = 0.28 + lit * 0.22 + (rnd() - 0.5) * 0.07; // DARKER ground than the (lighter) canopies
-          if (field.dry(x, z) > 0.62) { h = 0.12; s = 0.45; l = 0.44 + lit * 0.06; } // golden-brown dry earth patch
+          let l = 0.20 + lit * 0.20 + (rnd() - 0.5) * 0.07; // DARK ground — strong contrast vs the lighter canopies
+          if (field.dry(x, z) > 0.62) { h = 0.12; s = 0.45; l = 0.4 + lit * 0.06; } // golden-brown dry earth patch
           // A mild clump-to-clump dip for life — never the near-black it used to crush to.
-          if (rnd() < 0.14) { l -= 0.06; }
-          cc.setHSL(h, THREE.MathUtils.clamp(s, 0, 1), THREE.MathUtils.clamp(l, 0.22, 0.9)); // off black, but a deep ground tone
+          if (rnd() < 0.14) { l -= 0.05; }
+          cc.setHSL(h, THREE.MathUtils.clamp(s, 0, 1), THREE.MathUtils.clamp(l, 0.16, 0.9)); // off black, deep ground tone
           // Bigger, blade-ish dabs so the carpet reads densely planted (less bare
           // ground showing through), a minority taller and upright.
           scale = 1.0 + rnd() * 1.1;

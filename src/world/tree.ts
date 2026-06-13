@@ -112,16 +112,16 @@ function foliageColor(rnd: () => number, type: TreeType, lit: number, warmth = 0
   } else if (type === 'bush') {
     // warmer, brighter yellow-greens for low foliage catching light — but pulled a
     // touch deeper/cooler than before so even ground cover separates from turf.
-    h = 0.29 - lit * 0.05 - warmth * 0.04 + (rnd() - 0.5) * 0.035; // warm earthy
-    s = 0.48 + (1 - lit) * 0.1 + rnd() * 0.06;
-    l = 0.32 + lit * 0.38 + warmth * 0.02 + (rnd() - 0.5) * 0.06; // more light/shade contrast
+    h = 0.29 - lit * 0.05 - warmth * 0.04 + (rnd() - 0.5) * 0.07; // warm earthy + per-leaf jitter
+    s = 0.48 + (1 - lit) * 0.1 + (rnd() - 0.5) * 0.12;
+    l = 0.32 + lit * 0.38 + warmth * 0.02 + (rnd() - 0.5) * 0.12; // light/dark leaf variety
   } else {
     // broadleaf: deep cool emerald in shade → richer green crowns in sun, swung by
     // per-tree warmth across emerald (cool) ↔ chartreuse ↔ the odd golden turning
     // tree. Base hue sits cooler (~0.36) and lightness lower than the turf for pop.
-    h = 0.31 - lit * 0.04 - warmth * 0.15 + (rnd() - 0.5) * 0.04; // WIDE per-tree hue: olive ↔ emerald ↔ blue-green
-    s = 0.46 + (1 - lit) * 0.1 + warmth * 0.1 + rnd() * 0.06; // warm trees richer, cool trees softer
-    l = 0.30 + lit * 0.46 + warmth * 0.09 + (rnd() - 0.5) * 0.08; // wide top-lit→shade range = strong canopy contrast
+    h = 0.31 - lit * 0.04 - warmth * 0.15 + (rnd() - 0.5) * 0.09; // per-tree hue swing + wide per-LEAF hue jitter
+    s = 0.46 + (1 - lit) * 0.1 + warmth * 0.1 + (rnd() - 0.5) * 0.16; // per-leaf saturation variety
+    l = 0.30 + lit * 0.46 + warmth * 0.09 + (rnd() - 0.5) * 0.16; // light AND dark leaves within one canopy
   }
   // Golden-turning override (broadleaf/bush only): blend the whole dab toward a
   // warm autumn ochre as `golden` rises, so a handful of trees clearly turn.

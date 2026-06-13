@@ -17,20 +17,19 @@ import { FOG_NEAR, FOG_FAR, WIND_STRENGTH } from '../config';
 
 // --- Shader uniforms (live, drive the TSL graph) ---------------------------
 // Post-processing painterly grade (post.ts paint() node).
-export const uGlow = uniform(0.7); // halation glow strength — was const GLOW
-export const uImpasto = uniform(0.0); // canvas relief / texture — was const IMPASTO
-export const uChroma = uniform(1.0); // grade saturation at neutral — the lush, clean
-// green now lives in the baked colours (true-green hue, lifted off black), so the post
-// grade neither boosts to acid nor pulls to mud. Tune live via the panel.
-export const uVignette = uniform(1.0); // corner darkening amount
-export const uBleed = uniform(0.08); // oil-paint smear: blend colour along contours (post.ts)
+// Defaults below are the values dialed in live via the tuning panel and exported.
+export const uGlow = uniform(0.61); // halation glow strength
+export const uImpasto = uniform(1.5); // canvas relief / texture (impasto)
+export const uChroma = uniform(0.97); // grade saturation
+export const uVignette = uniform(0.84); // corner darkening amount
+export const uBleed = uniform(0.7); // oil-paint smear strength
 
 // Splat / stroke shaping (SplatMaterial.ts).
-export const uStrokeBias = uniform(0.6); // length-axis elongation bias (aAspect.add)
-export const uSizeFloor = uniform(0.004); // distance size-floor coefficient (depth.mul)
-export const uWind = uniform(WIND_STRENGTH); // wind sway strength (config: 1.1)
-export const uSizeJitter = uniform(0.56); // per-stamp size irregularity (1 ± fraction)
-export const uAngleJitter = uniform(1.2); // per-stamp direction irregularity (radians)
+export const uStrokeBias = uniform(1.21); // length-axis elongation bias (aAspect.add)
+export const uSizeFloor = uniform(0.013); // distance size-floor coefficient (depth.mul)
+export const uWind = uniform(WIND_STRENGTH); // wind sway strength (config)
+export const uSizeJitter = uniform(1.0); // per-stamp size irregularity (1 ± fraction)
+export const uAngleJitter = uniform(1.4); // per-stamp direction irregularity (radians)
 
 // Atmosphere — splat-side manual fog. scene.fog is updated separately in JS from
 // the SAME values (see jsSettings.fogNear / fogFar + Controls.ts).
@@ -41,8 +40,8 @@ export const uFogFar = uniform(FOG_FAR); // 560
 // Seeded from the current hard-coded values in Engine.ts. Engine.applySettings()
 // reads these on init; the control panel writes them and pokes the live targets.
 export const jsSettings = {
-  sunIntensity: 2.6, // DirectionalLight intensity (Engine.ts)
-  hemiIntensity: 0.62, // HemisphereLight intensity (Engine.ts)
+  sunIntensity: 2.6, // DirectionalLight intensity (Engine.ts) — panel default
+  hemiIntensity: 0.62, // HemisphereLight intensity (Engine.ts) — panel default
   fogNear: FOG_NEAR, // mirror of uFogNear for scene.fog.near
   fogFar: FOG_FAR, // mirror of uFogFar for scene.fog.far
 };
