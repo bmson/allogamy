@@ -8,6 +8,9 @@ import { palette } from '../render/palette';
 
 const _n = new THREE.Vector3();
 
+const clamp = THREE.MathUtils.clamp;
+const smoothstep = THREE.MathUtils.smoothstep;
+
 export interface SurfacePoint {
   slope: number; // 0 flat .. ~1 vertical
   path: number; // 0 grass .. 1 bare dirt path
@@ -42,24 +45,55 @@ export class TerrainField {
 
   /** Forest density in [0,1] — clumps of woodland with clearings between. */
   forest(x: number, z: number): number {
-    return THREE.MathUtils.smoothstep(this.fN.fbm(x * 0.0026, z * 0.0026, 3), -0.15, 0.5);
+    return smoothstep(this.fN.fbm(x * 0.0026, z * 0.0026, 3), -0.15, 0.5);
   }
 
-  /** Terrain height at world (x, z). */
-  height(x: number, z: number): number {
-    const continent = this.hN.fbm(x * 0.0009, z * 0.0009, 3); // broad rolling hills
+  /**
+   * The broad terrain RELIEF (rolling continent, overlapping ridgelines, hills and
+   * fine detail) — everything that shapes the land BEFORE the local water/path
+   * carving. Factored out from `height()` so the central-difference `normal()` can
+   * sample it directly: it dominates the surface gradient, while the path notch and
+   * the very-low-frequency wet dip change the normal only negligibly at a ~1.6 m eps
+   * (and the paths read as flat water anyway). This roughly halves the cost of
+   * `surface()`, which is the field's single hottest call (per grid vertex, plus a
+   * 4-tap normal). Deterministic and allocation-free.
+   */
+  private relief(x: number, z: number): number {
+    // Broad rolling continent: the slow swell that the eye reads as the land's
+    // body, before any sharper relief is layered on.
+    const continent = this.hN.fbm(x * 0.0009, z * 0.0009, 3);
+
+    // Mid-scale RIDGES, domain-warped so ranges overlap and interleave instead of
+    // tracing tidy parallel waves. The ridge transform (1 - |fbm|, then squared)
+    // turns rounded noise into crisp ridgelines separated by broad cupped valleys —
+    // which is what makes the hills read as carved land rather than dunes.
+    const wx = this.hN.noise(x * 0.0016 + 11, z * 0.0016 - 4) * 60;
+    const wz = this.hN.noise(x * 0.0016 - 7, z * 0.0016 + 19) * 60;
+    let ridge = 1 - Math.abs(this.hN.fbm((x + wx) * 0.0021 - 40, (z + wz) * 0.0021 + 70, 3));
+    ridge = ridge * ridge; // sharpen the crests, open out the valley floors
+
+    // Secondary hills and the fine breakup that keeps slopes from going glassy.
     const hills = this.hN.fbm(x * 0.0042 + 100, z * 0.0042 - 50, 4);
-    const ridges = this.hN.fbm(x * 0.0021 - 40, z * 0.0021 + 70, 3); // mid-scale relief
     const detail = this.hN.fbm(x * 0.02, z * 0.02, 2);
-    // Taller, more pronounced hills for depth and overlapping ridgelines.
-    let y = continent * 105 + ridges * 55 + hills * 26 + detail * 3.5;
+
+    // Taller, more pronounced relief for depth and overlapping ridgelines. The
+    // ridge term is biased to -0.5 so valleys sit BELOW the continent baseline,
+    // giving genuine hollows for water and shade to gather in.
+    return continent * 105 + (ridge - 0.5) * 64 + hills * 24 + detail * 3.5;
+  }
+
+  /** Terrain height at world (x, z) — relief, then the local water/path carving. */
+  height(x: number, z: number): number {
+    let y = this.relief(x, z);
     // Scoop the wet basins lower so pools nestle in genuine hollows (and the land
     // reads with more relief). The dip is squared so it only bites where wetness is
     // strong — a few cupped low places, not a general lowering.
     const wet = this.wetness(x, z);
     y -= wet * wet * 16;
-    // Carve paths a touch lower so they read as worn tracks.
-    y -= this.pathMask(x, z) * 1.4;
+    // Carve paths a touch lower so they read as worn tracks (now a sunk water bed):
+    // a soft V — deepest down the centreline, easing back up toward the banks.
+    const p = this.pathMask(x, z);
+    y -= p * p * 2.0;
     return y;
   }
 
@@ -75,7 +109,8 @@ export class TerrainField {
    */
   pathMask(x: number, z: number): number {
     // Domain warp: shove the lookup around by a lower-frequency flow field so the
-    // track wanders organically instead of tracing a tidy noise contour.
+    // track wanders organically instead of tracing a tidy noise contour. Two octaves
+    // is plenty for the warp (it only needs to be smooth), keeping this cheap.
     const wx = this.wN.fbm(x * 0.0011 + 19, z * 0.0011 - 7, 2) * 230;
     const wz = this.wN.fbm(x * 0.0011 - 31, z * 0.0011 + 23, 2) * 230;
     const px = x + wx, pz = z + wz;
@@ -84,14 +119,14 @@ export class TerrainField {
 
     // Half-width breathes between ~0 (track fades to nothing) and full worn track.
     const widthN = this.wN.fbm(x * 0.0016 + 5, z * 0.0016 + 5, 2); // ~[-1,1]
-    const half = THREE.MathUtils.clamp(0.062 + widthN * 0.05, 0.0, 0.11);
+    const half = clamp(0.062 + widthN * 0.05, 0.0, 0.11);
     if (half <= 0.001) return 0; // a stretch where the path has worn away entirely
 
     // Frayed edge: nibble the contour distance with fine noise so the rim breaks up
     // into ragged tongues/fingers rather than a clean feathered band.
     const fray = this.wN.fbm(x * 0.05, z * 0.05, 3) * 0.026;
     const d = Math.abs(v) + fray;
-    return 1 - THREE.MathUtils.smoothstep(d, half * 0.22, half);
+    return 1 - smoothstep(d, half * 0.22, half);
   }
 
   /**
@@ -101,15 +136,20 @@ export class TerrainField {
    * stay sparse. Kept analytic & cheap (sampled, never per-frame).
    */
   wetness(x: number, z: number): number {
-    return THREE.MathUtils.smoothstep(this.wN.fbm(x * 0.0013 - 61, z * 0.0013 + 47, 3), 0.28, 0.62);
+    return smoothstep(this.wN.fbm(x * 0.0013 - 61, z * 0.0013 + 47, 3), 0.28, 0.62);
   }
 
-  /** Surface normal via central differences. */
+  /**
+   * Surface normal via central differences. Samples the broad RELIEF (not the full
+   * carved height): the path notch and the slow wet dip perturb a 1.6 m-eps gradient
+   * negligibly, and paths shade as flat water regardless — so this halves the normal
+   * cost without a visible change to the lit turf.
+   */
   normal(x: number, z: number, eps = 1.6, out = _n): THREE.Vector3 {
-    const hL = this.height(x - eps, z);
-    const hR = this.height(x + eps, z);
-    const hD = this.height(x, z - eps);
-    const hU = this.height(x, z + eps);
+    const hL = this.relief(x - eps, z);
+    const hR = this.relief(x + eps, z);
+    const hD = this.relief(x, z - eps);
+    const hU = this.relief(x, z + eps);
     return out.set(hL - hR, 2 * eps, hD - hU).normalize();
   }
 
@@ -122,10 +162,13 @@ export class TerrainField {
     // weathered scree fields at a coarse scale, plus finer scattered outcrops, so
     // the meadow is studded with far more stone variety. Two octave-scales keep it
     // from reading as one uniform speckle.
-    const scree = THREE.MathUtils.smoothstep(this.rN.fbm(x * 0.0055, z * 0.0055, 3), 0.22, 0.55);
-    const outcrop = THREE.MathUtils.smoothstep(this.rN.fbm(x * 0.018 + 40, z * 0.018 - 23, 3), 0.3, 0.58);
+    const scree = smoothstep(this.rN.fbm(x * 0.0055, z * 0.0055, 3), 0.22, 0.55);
+    const outcrop = smoothstep(this.rN.fbm(x * 0.018 + 40, z * 0.018 - 23, 3), 0.3, 0.58);
     const patch = Math.max(scree * 0.7, outcrop * 0.6);
-    const rock = THREE.MathUtils.clamp(Math.max(slope * 1.7 - 0.25, 0) + patch, 0, 1);
+    let rock = clamp(Math.max(slope * 1.7 - 0.25, 0) + patch, 0, 1);
+    // The water channel washes its bed clean — suppress stone inside the brook so a
+    // scree patch never floats over the calm surface as a rocky speckle.
+    if (path > 0.3) rock *= 1 - smoothstep(path, 0.3, 0.6);
     return { slope, path, rock, nx, nz };
   }
 
@@ -139,15 +182,15 @@ export class TerrainField {
     slope: number, path: number, rock: number,
     out = new THREE.Color(),
   ): THREE.Color {
-    const hn = THREE.MathUtils.clamp((y + 36) / 110, 0, 1);
+    const hn = clamp((y + 36) / 110, 0, 1);
 
     // Base green, sunlit toward the tops.
-    out.copy(palette.grassLow).lerp(palette.grassHigh, THREE.MathUtils.smoothstep(hn, 0.32, 0.96));
+    out.copy(palette.grassLow).lerp(palette.grassHigh, smoothstep(hn, 0.32, 0.96));
     // Shade and deepen on slopes.
-    out.lerp(palette.grassDark, THREE.MathUtils.clamp(slope * 1.5, 0, 0.7));
-    out.lerp(palette.grassDeep, THREE.MathUtils.smoothstep(slope, 0.18, 0.5) * 0.3);
+    out.lerp(palette.grassDark, clamp(slope * 1.5, 0, 0.7));
+    out.lerp(palette.grassDeep, smoothstep(slope, 0.18, 0.5) * 0.3);
     // Damp, deep-green margins around the wet basins for richer value depth.
-    out.lerp(palette.grassDeep, THREE.MathUtils.smoothstep(this.wetness(x, z), 0.45, 0.85) * 0.4);
+    out.lerp(palette.grassDeep, smoothstep(this.wetness(x, z), 0.45, 0.85) * 0.4);
 
     // Water stream — the winding channel (was a dirt track) now reads as a calm
     // blue brook nestled in its sunk bed. The colour bands run from a deep blue-
@@ -159,23 +202,25 @@ export class TerrainField {
       // Wet-mud rim first: a thin dark band rides the frayed outer edge of the
       // channel (path mid, not full) where wet earth meets grass.
       const rim = (1 - Math.abs(path - 0.42) * 3.4);
-      if (rim > 0) out.lerp(palette.waterEdge, THREE.MathUtils.clamp(rim, 0, 1) * 0.75);
+      if (rim > 0) out.lerp(palette.waterEdge, clamp(rim, 0, 1) * 0.75);
       // The channel body: shallows toward the banks deepening to the centre. A slow
       // ripple shifts the deep/shallow mix so the surface has gentle movement of
-      // tone without reading as broken ground.
-      const ripple = this.tN.fbm(x * 0.02, z * 0.02, 2) * 0.5 + 0.5;
-      _water.copy(palette.waterShallow).lerp(palette.waterDeep, THREE.MathUtils.smoothstep(path, 0.3, 0.92));
+      // tone without reading as broken ground. A second, slower swell crossing the
+      // first keeps the ripple from tiling into a regular wash.
+      const ripple = (this.tN.fbm(x * 0.02, z * 0.02, 2)
+        + this.tN.noise(z * 0.009 - 13, x * 0.009 + 7) * 0.5) * 0.4 + 0.5;
+      _water.copy(palette.waterShallow).lerp(palette.waterDeep, smoothstep(path, 0.3, 0.92));
       // a touch of sun-skimmed sheen riding the ripple crests on the calm surface
       if (ripple > 0.62) _water.lerp(palette.waterShallow, (ripple - 0.62) * 0.7);
       // Only the channel proper paints as water — faint/worn stretches keep their
       // green so the brook reads as a thin winding ribbon the meadow presses up to.
-      out.lerp(_water, THREE.MathUtils.smoothstep(path, 0.3, 0.9));
+      out.lerp(_water, smoothstep(path, 0.3, 0.9));
     }
 
     // Rock.
     if (rock > 0.01) {
       _rk.copy(palette.rockShadow).lerp(palette.rock, this.tN.noise(x * 0.08, z * 0.08) * 0.5 + 0.5);
-      out.lerp(_rk, THREE.MathUtils.smoothstep(rock, 0.3, 0.8));
+      out.lerp(_rk, smoothstep(rock, 0.3, 0.8));
     }
     return out;
   }

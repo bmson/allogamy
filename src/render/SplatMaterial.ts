@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import {
   attribute, uv, vec2, vec3, vec4, float, smoothstep, mix, modelViewMatrix,
-  cameraProjectionMatrix, positionGeometry, time, sin, cos, fract,
+  cameraProjectionMatrix, positionGeometry, time, sin, cos, fract, vertexStage,
 } from 'three/tsl';
 import { palette } from './palette';
 import { uFogNear, uFogFar, uWind, uStrokeBias, uSizeFloor, uSizeJitter, uAngleJitter } from '../core/settings';
@@ -46,7 +46,10 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   const gust = sin(aCenter.x.mul(0.13).add(aCenter.z.mul(0.1)).add(time.mul(0.9)))
     .add(sin(aCenter.x.mul(0.05).sub(aCenter.z.mul(0.04)).add(time.mul(0.5))).mul(0.5));
   const amp = aWind.mul(uWind);
-  const wind = vec3(gust.mul(amp), float(0.0), gust.mul(amp).mul(0.5));
+  // Hoist the swayed X displacement so the dominant axis is evaluated once and the
+  // Z component is just a scaled copy (Z = X*0.5) — same gust, one fewer multiply.
+  const swayX = gust.mul(amp);
+  const wind = vec3(swayX, float(0.0), swayX.mul(0.5));
 
   // Billboard: place the swayed centre in view space, then build the quad corner —
   // stretched along its length by aAspect, rotated by aAngle, sized by aScale.
@@ -90,7 +93,7 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   // stage, so the local coordinate `r = uv*2-1` is exactly the reference's rotated,
   // aspect-corrected `r` — r.y runs along the stroke's LENGTH. d = dot(r,r) is the
   // squared radius; the stamp is a soft gaussian feather rather than a hard disc.
-  const r = uv().sub(vec2(0.5, 0.5)).mul(2.0); // -1..1 in the stroke's own frame
+  const r = uv().sub(0.5).mul(2.0); // -1..1 in the stroke's own frame
   const seed = fract(sin(aCenter.x.mul(12.9898).add(aCenter.z.mul(78.233))).mul(43758.5453));
   // Dry-media banding: hash bands ACROSS the stroke length (floor(r.y*6)) per stamp
   // (floor(seed*91)) and modulate the squared radius — this is what makes a mark read
@@ -109,11 +112,17 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   // grey (luminance), then wash toward the pale blue-violet aerial colour, so distant
   // strokes dissolve into luminous airy paper rather than a hard edge or grey soup.
   // The aerial colour matches palette.fog (= the linear value vec3(0.72,0.75,0.89)).
-  const air = smoothstep(uFogNear, uFogFar, depth);
+  // This depends ONLY on per-instance quantities (aColor and depth — depth is the
+  // un-cornered centre Z, identical at all four quad corners), so the whole grade is
+  // constant across the dab. Compute it once per VERTEX (4×/instance) and interpolate
+  // a flat constant rather than re-evaluating the two mixes for every covered pixel —
+  // the carpet is heavy overdraw, so this moves real ALU off the hot per-fragment path
+  // while producing a bit-identical result.
   const fogCol = vec3(palette.fog.r, palette.fog.g, palette.fog.b);
+  const air = smoothstep(uFogNear, uFogFar, depth);
   const lum = aColor.dot(vec3(0.299, 0.587, 0.114));
   const greyed = mix(aColor, vec3(lum, lum, lum), air.mul(0.35));
-  mat.colorNode = mix(greyed, fogCol, air.mul(0.72));
+  mat.colorNode = vertexStage(mix(greyed, fogCol, air.mul(0.72)));
 
   return mat;
 }

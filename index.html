@@ -40,6 +40,16 @@
       }
       #hud.show { opacity: 1; }
       #hud b { color: #cfeef7; font-weight: 600; }
+
+      #phone-btn {
+        position: fixed; right: 16px; bottom: 22px; z-index: 6;
+        padding: 0.55rem 1rem; font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase;
+        color: rgba(255,255,255,0.85); background: rgba(10,30,40,0.32); backdrop-filter: blur(8px);
+        border: 1px solid rgba(255,255,255,0.14); border-radius: 999px; cursor: pointer;
+        font-family: ui-sans-serif, system-ui, sans-serif; transition: background 0.15s ease;
+      }
+      #phone-btn:hover { background: rgba(10,30,40,0.5); }
+      #phone-btn.on { background: rgba(120,170,90,0.6); color: #fff; border-color: rgba(160,210,120,0.5); }
     </style>
   </head>
   <body>
@@ -53,6 +63,7 @@
       <span><b>← →</b> tilt &amp; turn</span>
       <span><b>↑ ↓</b> climb &amp; dive</span>
     </div>
+    <button id="phone-btn">fly with phone</button>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

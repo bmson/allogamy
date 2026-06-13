@@ -1,13 +1,17 @@
 import * as THREE from 'three/webgpu';
 import { mulberry32, hash2 } from '../core/rng';
 import { palette } from '../render/palette';
-import { TerrainField } from './TerrainField';
+import { TerrainField, SurfacePoint } from './TerrainField';
 import { CHUNK_SIZE, WORLD_SEED } from '../config';
 
 // Wild flower patches — the meadow's quiet colour punctuation. Clusters of small
-// bright blooms scatter across open, low-slope grass: daisy-like rings (a circle
-// of white / yellow / violet petals around a golden or orange eye) plus loose
-// drifts of single blooms, each lifted on one short thin green stem.
+// bright blooms scatter across open, low-slope grass. Several recognisable wild-
+// flower archetypes share the field so a meadow reads with real botanical variety
+// rather than one repeated daisy: ox-eye daisies (white ring + gold disc), sunny
+// buttercups, violet/lavender asters, scarlet poppies (dark heart), sky-blue
+// cornflowers, plus VERTICAL accents — spire blooms (a stacked foxglove-like
+// column of bells) and lacy umbels (a yarrow-like cap of tiny dabs) — and the odd
+// closed bud. Each flower still rises on one short thin green stem.
 //
 // Everything lives in the SAME splat attribute layout as foliage (aCenter world
 // pos, aScale world size, aColor BAKED colour, aWind sway, aAngle stroke
@@ -18,11 +22,15 @@ import { CHUNK_SIZE, WORLD_SEED } from '../config';
 //
 // Art intent: petals are round dabs that catch the light (warm sunlit, faintly
 // cool in shade) and sway gently on the wind; the eye is a small still warm dot;
-// the stem is a single mild-aspect upright green dab that stays put. Tasteful
-// punctuation across the turf — clustered, never a wall-to-wall carpet.
+// the stem is a single mild-aspect upright green dab that stays put. A patch keeps
+// a DOMINANT species so blooms drift in coherent colour families (painterly), with
+// occasional companions mixed in. Tasteful punctuation across the turf — clustered,
+// never a wall-to-wall carpet.
 
 const clamp = THREE.MathUtils.clamp;
 const _col = new THREE.Color();
+// Reused HSL scratch so the per-petal colour maths never allocates in the hot loop.
+const _hsl = { h: 0, s: 0, l: 0 };
 
 // Normalised sun for baking petal light (same convention as the turf/foliage:
 // shade deepens & cools, sunlit warms & lifts). Kept analytic — no normals here.
@@ -37,18 +45,82 @@ interface Acc {
   asp: number[];
 }
 
+// ---- bloom archetypes ------------------------------------------------------
+// Each species fixes the petal colour family, its disc/eye, and a coarse FORM so
+// the meadow carries genuine variety. Colours are authored as base THREE.Colors
+// (mostly from the palette; poppy-red and cornflower-blue are derived locally so
+// no new palette keys are needed) and then light-coupled per petal at stamp time.
+enum Form {
+  Ray, // classic flat daisy: a ring of ray petals around a disc eye
+  Cup, // a few broad overlapping petals forming a shallow cup (buttercup/poppy)
+  Spire, // a vertical column of small bells climbing the stem (foxglove-like)
+  Umbel, // a flat lacy cap of many tiny florets (yarrow / cow-parsley)
+}
+
+interface Species {
+  form: Form;
+  petal: THREE.Color; // ray / cup / floret base colour
+  eye: THREE.Color; // central disc
+  weight: number; // relative likelihood of being a patch's dominant species
+}
+
+// Derived hues the palette doesn't carry (kept local so palette.ts is untouched).
+const POPPY_RED = new THREE.Color('#e03521'); // scarlet field-poppy ray
+const CORNFLOWER = new THREE.Color('#5a78d8'); // true cornflower blue
+const POPPY_HEART = new THREE.Color('#241410'); // near-black poppy centre
+const BUTTERCUP = new THREE.Color('#ffd21a'); // glossy deep-yellow cup
+
+const SPECIES: Species[] = [
+  { form: Form.Ray, petal: palette.flowerWhite, eye: palette.goldenEye, weight: 1.0 }, // ox-eye daisy
+  { form: Form.Ray, petal: palette.flowerYellow, eye: palette.orangeEye, weight: 0.7 }, // yellow daisy
+  { form: Form.Ray, petal: palette.flowerViolet, eye: palette.goldenEye, weight: 0.6 }, // violet aster
+  { form: Form.Ray, petal: palette.flowerLavender, eye: palette.goldenEye, weight: 0.4 }, // lavender aster
+  { form: Form.Cup, petal: BUTTERCUP, eye: palette.goldenEye, weight: 0.7 }, // buttercup
+  { form: Form.Cup, petal: POPPY_RED, eye: POPPY_HEART, weight: 0.55 }, // scarlet poppy
+  { form: Form.Ray, petal: CORNFLOWER, eye: palette.goldenEye, weight: 0.45 }, // cornflower
+  { form: Form.Spire, petal: palette.flowerViolet, eye: palette.flowerLavender, weight: 0.32 }, // foxglove spire
+  { form: Form.Umbel, petal: palette.flowerWhite, eye: palette.flowerWhite, weight: 0.3 }, // yarrow umbel
+];
+const SPECIES_TOTAL = SPECIES.reduce((s, sp) => s + sp.weight, 0);
+
+/** Pick a species by weight from the patch's rng (deterministic). */
+function pickSpecies(rnd: () => number): Species {
+  let t = rnd() * SPECIES_TOTAL;
+  for (const sp of SPECIES) {
+    t -= sp.weight;
+    if (t <= 0) return sp;
+  }
+  return SPECIES[0];
+}
+
 /**
- * Stamp one bloom: a thin upright green stem topped by a ring of petals around a
- * small warm eye. The whole flower's exposure (`lit`, 0 shade .. 1 full sun) is
- * baked into every petal so it sits in the same light as the surrounding turf.
+ * Bake a petal colour from a species base: warm & lift in sun, cool & deepen in
+ * shade, with petals facing the sun azimuth (`facing`, the dab's outward dot with
+ * the sun) catching a touch more light. Lightness stays high — these are the
+ * meadow's highlights and must never crush to near-black. Writes into `_col`.
  */
-function emitFlower(
-  acc: Acc, x: number, y: number, z: number,
-  size: number, lit: number, rnd: () => number,
-) {
-  // ---- stem: one mild-aspect upright dab, sitting just under the head, STILL.
-  // A muted shaded green so it reads as a stalk, not a leaf fleck.
-  const stemH = size * (1.4 + rnd() * 0.8);
+function bakePetal(
+  base: THREE.Color, lit: number, facing: number, rnd: () => number,
+  litFloor = 0.4, litMax = 0.97,
+): void {
+  base.getHSL(_hsl);
+  // Sun-driven value: shaded blooms sit lower, sunlit ones glow; the outward
+  // facing term gives a soft directional sheen across a single flower's petals.
+  const l = clamp(_hsl.l * 0.5 + 0.34 + lit * 0.3 + facing * 0.05 + (rnd() - 0.5) * 0.06, litFloor, litMax);
+  _col.setHSL(
+    _hsl.h + (rnd() - 0.5) * 0.02,
+    clamp(_hsl.s * (0.9 + (1 - lit) * 0.18) + (rnd() - 0.5) * 0.04, 0, 1),
+    l,
+  );
+}
+
+/** Stamp the short, still green stem that every bloom rises on. Returns its top. */
+function emitStem(
+  acc: Acc, x: number, y: number, z: number, size: number, stemH: number,
+  lit: number, rnd: () => number,
+): void {
+  // A muted shaded green so it reads as a stalk, not a leaf fleck. STILL — only
+  // the head sways — so the bloom feels rooted while its petals catch the gust.
   _col.copy(palette.foliage).lerp(palette.foliageDark, 0.35 + rnd() * 0.3)
     .offsetHSL((rnd() - 0.5) * 0.02, (rnd() - 0.5) * 0.05, (lit - 0.5) * 0.12);
   acc.cen.push(x, y + stemH * 0.5, z);
@@ -57,60 +129,15 @@ function emitFlower(
   acc.wnd.push(0); // stems stay put — only the head sways
   acc.ang.push(0); // upright
   acc.asp.push(1.4 + rnd() * 0.6); // mild elongation → reads as a stalk
+}
 
-  const hx = x, hy = y + stemH, hz = z;
-
-  // ---- petal colour family for this bloom ----
-  // white / yellow / violet, with a faint light coupling so sunlit blooms warm
-  // and brighten while shaded ones cool and deepen. Never near-black.
-  const f = rnd();
-  let pBase: THREE.Color;
-  let eye: THREE.Color;
-  if (f < 0.46) {
-    pBase = palette.flowerWhite;
-    eye = palette.goldenEye; // classic ox-eye daisy
-  } else if (f < 0.78) {
-    pBase = palette.flowerYellow;
-    eye = rnd() < 0.5 ? palette.orangeEye : palette.goldenEye;
-  } else {
-    pBase = rnd() < 0.5 ? palette.flowerViolet : palette.flowerLavender;
-    eye = palette.goldenEye; // violet ray-petals, gold disc
-  }
-
-  // ---- petal ring ----
-  const petals = 5 + Math.floor(rnd() * 4); // 5..8 ray petals
-  const headR = size * (0.62 + rnd() * 0.3);
-  const phase = rnd() * Math.PI * 2;
-  const wind = 0.55 + rnd() * 0.2; // heads catch the gust
-  for (let i = 0; i < petals; i++) {
-    const a = phase + (i / petals) * Math.PI * 2 + (rnd() - 0.5) * 0.25;
-    const rr = headR * (0.86 + rnd() * 0.22);
-    const px = hx + Math.cos(a) * rr;
-    const pz = hz + Math.sin(a) * rr;
-    const py = hy + (rnd() - 0.5) * size * 0.12;
-    // baked light: warm & lift in sun, cool & deepen in shade; petals facing the
-    // sun azimuth catch a touch more. Lightness stays high — these are highlights.
-    const sun = (Math.cos(a) * SUNX + Math.sin(a) * SUNZ);
-    const l = clamp(0.55 + lit * 0.32 + sun * 0.05 + (rnd() - 0.5) * 0.06, 0.4, 0.97);
-    _col.copy(pBase);
-    const hsl = { h: 0, s: 0, l: 0 };
-    _col.getHSL(hsl);
-    _col.setHSL(
-      hsl.h + (rnd() - 0.5) * 0.02,
-      clamp(hsl.s * (0.9 + (1 - lit) * 0.18) + (rnd() - 0.5) * 0.04, 0, 1),
-      l,
-    );
-    acc.cen.push(px, py, pz);
-    acc.scl.push(size * (0.42 + rnd() * 0.22));
-    acc.col.push(_col.r, _col.g, _col.b);
-    acc.wnd.push(wind);
-    acc.ang.push(a + Math.PI / 2 + (rnd() - 0.5) * 0.4); // petals radiate from the eye
-    acc.asp.push(1.15 + rnd() * 0.35); // gently oval ray-petal (stays leaf/petal-ish)
-  }
-
-  // ---- eye: a small, warm, still-ish dot at the centre ----
+/** A small, warm, still-ish central disc/eye dab. */
+function emitEye(
+  acc: Acc, x: number, y: number, z: number, size: number, eye: THREE.Color,
+  lit: number, wind: number, rnd: () => number,
+): void {
   _col.copy(eye).offsetHSL((rnd() - 0.5) * 0.02, 0, (lit - 0.5) * 0.1 + (rnd() - 0.5) * 0.05);
-  acc.cen.push(hx, hy + size * 0.04, hz);
+  acc.cen.push(x, y + size * 0.04, z);
   acc.scl.push(size * (0.34 + rnd() * 0.14));
   acc.col.push(_col.r, _col.g, _col.b);
   acc.wnd.push(wind * 0.7);
@@ -119,11 +146,140 @@ function emitFlower(
 }
 
 /**
+ * Stamp one bloom of `sp` at (x,z) on the turf. The whole flower's exposure
+ * (`lit`, 0 shade .. 1 full sun) is baked into every petal so it sits in the same
+ * light as the surrounding turf. `bud` produces a closed green-tipped bloom (a
+ * still-furled head) for a touch of life-cycle variety.
+ */
+function emitFlower(
+  acc: Acc, sp: Species, x: number, y: number, z: number,
+  size: number, lit: number, rnd: () => number, bud = false,
+): void {
+  // Spires & umbels stand a little taller; cups & rays keep a short daisy stalk.
+  const tall = sp.form === Form.Spire ? 1.9 + rnd() * 1.1 : 1.4 + rnd() * 0.8;
+  const stemH = size * tall;
+  emitStem(acc, x, y, z, size, stemH, lit, rnd);
+
+  const hx = x, hy = y + stemH, hz = z;
+  const wind = 0.55 + rnd() * 0.2; // heads catch the gust
+
+  // ---- closed bud: a tight furled head, mostly green with a hint of its colour.
+  if (bud) {
+    _col.copy(palette.foliageLight).lerp(sp.petal, 0.22 + rnd() * 0.18)
+      .offsetHSL(0, -0.05, (lit - 0.5) * 0.12);
+    acc.cen.push(hx, hy, hz);
+    acc.scl.push(size * (0.42 + rnd() * 0.16));
+    acc.col.push(_col.r, _col.g, _col.b);
+    acc.wnd.push(wind);
+    acc.ang.push(rnd() * Math.PI);
+    acc.asp.push(1.25 + rnd() * 0.35); // slightly egg-shaped, vertical
+    return;
+  }
+
+  switch (sp.form) {
+    case Form.Spire: {
+      // A vertical column of small bells climbing the upper stem — read top to
+      // bottom as opening flowers. Bells alternate side to side and the lowest are
+      // largest (fully open), shrinking to buds at the tip.
+      const bells = 4 + Math.floor(rnd() * 3); // 4..6 bells
+      const colH = stemH * 0.55;
+      for (let i = 0; i < bells; i++) {
+        const t = i / (bells - 1); // 0 bottom .. 1 tip
+        const by = hy - colH * (1 - t); // climb the stem
+        const side = (i & 1 ? 1 : -1) * (0.5 + rnd() * 0.4);
+        const bx = hx + side * size * 0.5;
+        const bz = hz + (rnd() - 0.5) * size * 0.35;
+        // tip florets are smaller, paler buds; lower ones open & saturated
+        bakePetal(sp.petal, lit, 0.0, rnd, 0.4 + t * 0.1, 0.95);
+        if (t > 0.7) _col.lerp(palette.foliageLight, (t - 0.7) * 0.6); // furled tip
+        acc.cen.push(bx, by, bz);
+        acc.scl.push(size * (0.5 - t * 0.22 + rnd() * 0.12));
+        acc.col.push(_col.r, _col.g, _col.b);
+        acc.wnd.push(wind);
+        acc.ang.push((rnd() - 0.5) * 0.5);
+        acc.asp.push(1.2 + rnd() * 0.4); // bell-ish ovals
+      }
+      return;
+    }
+    case Form.Umbel: {
+      // A flat lacy cap of many tiny florets (yarrow / cow-parsley): a dense disc
+      // of small round dabs rather than distinct rays. Reads as a soft cloud.
+      const florets = 9 + Math.floor(rnd() * 7); // 9..15 tiny dabs
+      const capR = size * (0.66 + rnd() * 0.3);
+      for (let i = 0; i < florets; i++) {
+        const a = rnd() * Math.PI * 2;
+        const rr = capR * Math.sqrt(rnd());
+        const fx = hx + Math.cos(a) * rr;
+        const fz = hz + Math.sin(a) * rr;
+        const facing = Math.cos(a) * SUNX + Math.sin(a) * SUNZ;
+        bakePetal(sp.petal, lit, facing, rnd, 0.5, 0.98);
+        acc.cen.push(fx, hy + (rnd() - 0.5) * size * 0.06, fz);
+        acc.scl.push(size * (0.2 + rnd() * 0.14)); // tiny florets
+        acc.col.push(_col.r, _col.g, _col.b);
+        acc.wnd.push(wind);
+        acc.ang.push(rnd() * Math.PI);
+        acc.asp.push(0.9 + rnd() * 0.2); // round
+      }
+      return;
+    }
+    case Form.Cup: {
+      // A few broad overlapping petals forming a shallow cup (buttercup / poppy):
+      // fewer, larger, rounder dabs that overlap into one glossy bloom, with a
+      // small dark or gold heart. Poppy-style hearts are near-black; gold otherwise.
+      const petals = 4 + Math.floor(rnd() * 2); // 4..5 broad petals
+      const headR = size * (0.5 + rnd() * 0.22);
+      const phase = rnd() * Math.PI * 2;
+      for (let i = 0; i < petals; i++) {
+        const a = phase + (i / petals) * Math.PI * 2 + (rnd() - 0.5) * 0.3;
+        const rr = headR * (0.7 + rnd() * 0.2);
+        const px = hx + Math.cos(a) * rr;
+        const pz = hz + Math.sin(a) * rr;
+        const facing = Math.cos(a) * SUNX + Math.sin(a) * SUNZ;
+        bakePetal(sp.petal, lit, facing, rnd, 0.42, 0.97);
+        acc.cen.push(px, hy + (rnd() - 0.5) * size * 0.1, pz);
+        acc.scl.push(size * (0.5 + rnd() * 0.24)); // broad petals
+        acc.col.push(_col.r, _col.g, _col.b);
+        acc.wnd.push(wind);
+        acc.ang.push(a + Math.PI / 2 + (rnd() - 0.5) * 0.4);
+        acc.asp.push(1.05 + rnd() * 0.25); // nearly round, overlapping
+      }
+      emitEye(acc, hx, hy, hz, size, sp.eye, lit, wind, rnd);
+      return;
+    }
+    default: {
+      // Ray: classic flat daisy / aster — a ring of slender ray petals radiating
+      // from a central disc eye. The signature meadow form.
+      const petals = 6 + Math.floor(rnd() * 4); // 6..9 ray petals
+      const headR = size * (0.62 + rnd() * 0.3);
+      const phase = rnd() * Math.PI * 2;
+      for (let i = 0; i < petals; i++) {
+        const a = phase + (i / petals) * Math.PI * 2 + (rnd() - 0.5) * 0.25;
+        const rr = headR * (0.86 + rnd() * 0.22);
+        const px = hx + Math.cos(a) * rr;
+        const pz = hz + Math.sin(a) * rr;
+        const py = hy + (rnd() - 0.5) * size * 0.12;
+        const facing = Math.cos(a) * SUNX + Math.sin(a) * SUNZ;
+        bakePetal(sp.petal, lit, facing, rnd);
+        acc.cen.push(px, py, pz);
+        acc.scl.push(size * (0.42 + rnd() * 0.22));
+        acc.col.push(_col.r, _col.g, _col.b);
+        acc.wnd.push(wind);
+        acc.ang.push(a + Math.PI / 2 + (rnd() - 0.5) * 0.4); // petals radiate from the eye
+        acc.asp.push(1.25 + rnd() * 0.45); // slender oval ray-petal
+      }
+      emitEye(acc, hx, hy, hz, size, sp.eye, lit, wind, rnd);
+      return;
+    }
+  }
+}
+
+/**
  * Scatter wild flower patches over one chunk. Returns null when the chunk holds
  * no flowers (so the caller can skip building an empty mesh). Placement: only on
  * grassy, low-slope ground (no path / rock / steep), denser in clearings (low
  * forest density) and sparse under woodland. Patches are clumps of blooms with a
- * looser drift of singles around them — colour punctuation, not a carpet.
+ * looser drift of singles around them — colour punctuation, not a carpet. Each
+ * patch keeps a DOMINANT species so blooms drift in coherent colour families.
  */
 export function scatterFlowers(
   field: TerrainField, cx: number, cz: number,
@@ -144,16 +300,12 @@ export function scatterFlowers(
 
   const acc: Acc = { cen: [], scl: [], col: [], wnd: [], ang: [], asp: [] };
 
-  // Is this spot suitable for flowers? Grassy, gentle, not a track or rock.
-  const grassy = (x: number, z: number): boolean => {
-    const s = field.surface(x, z);
-    return s.path < 0.18 && s.rock < 0.32 && s.slope < 0.4;
-  };
-
-  // Bake exposure for a flower at (x,z): meadow sun term from the surface normal,
-  // matching the turf so blooms share the landscape's light.
-  const exposure = (x: number, z: number): number => {
-    const s = field.surface(x, z);
+  // Single field.surface() call answers BOTH "is this grassy?" and the baked sun
+  // exposure (was two full surface evals — each does a 4-sample normal). Returns
+  // -1 for unsuitable spots (path / rock / steep), else the exposure in [0,1].
+  const probe = (x: number, z: number): number => {
+    const s: SurfacePoint = field.surface(x, z);
+    if (s.path >= 0.18 || s.rock >= 0.32 || s.slope >= 0.4) return -1;
     const ny = Math.sqrt(Math.max(0, 1 - s.nx * s.nx - s.nz * s.nz));
     const ndotl = s.nx * SUNX + ny * 0.55 + s.nz * SUNZ;
     return clamp(0.5 + 0.5 * ndotl, 0, 1);
@@ -167,7 +319,7 @@ export function scatterFlowers(
     for (let gx = 0; gx < cells; gx++) {
       const px = ox + (gx + rnd()) * cs;
       const pz = oz + (gz + rnd()) * cs;
-      if (!grassy(px, pz)) continue;
+      if (probe(px, pz) < 0) continue;
 
       // Clearings (low forest) bloom; woodland is sparse. forest ~0 open .. 1 dense.
       const open = 1 - field.forest(px, pz);
@@ -175,6 +327,12 @@ export function scatterFlowers(
       const sun = field.dry(px, pz);
       const chance = 0.16 + open * 0.5 + sun * 0.12;
       if (rnd() > chance) continue;
+
+      // This patch's dominant species → coherent colour drifts, not confetti. A
+      // minority of blooms swap to a random companion so a stand stays painterly
+      // but not monotone.
+      const dominant = pickSpecies(rnd);
+      const purity = 0.7 + rnd() * 0.25; // fraction of blooms that match the dominant
 
       const patchR = 3 + rnd() * 7;
       const blooms = 5 + Math.floor(rnd() * (10 + open * 14)); // fuller in the open
@@ -184,10 +342,13 @@ export function scatterFlowers(
         const rr = patchR * Math.sqrt(rnd());
         const fx = px + Math.cos(a) * rr;
         const fz = pz + Math.sin(a) * rr;
-        if (!grassy(fx, fz)) continue; // respect edges (paths/rock/slope)
+        const lit = probe(fx, fz);
+        if (lit < 0) continue; // respect edges (paths/rock/slope)
         const y = field.height(fx, fz);
         const size = 0.7 + rnd() * 0.7;
-        emitFlower(acc, fx, y + 0.06, fz, size, exposure(fx, fz), rnd);
+        const sp = rnd() < purity ? dominant : pickSpecies(rnd);
+        const bud = rnd() < 0.1; // the odd closed bud for life-cycle variety
+        emitFlower(acc, sp, fx, y + 0.06, fz, size, lit, rnd, bud);
       }
     }
   }
@@ -200,12 +361,15 @@ export function scatterFlowers(
     for (let gx = 0; gx < dcells; gx++) {
       const fx = ox + (gx + rnd()) * dcs;
       const fz = oz + (gz + rnd()) * dcs;
-      if (!grassy(fx, fz)) continue;
+      const lit = probe(fx, fz);
+      if (lit < 0) continue;
       const open = 1 - field.forest(fx, fz);
       if (rnd() > 0.06 + open * 0.16) continue; // tasteful, not a carpet
       const y = field.height(fx, fz);
       const size = 0.65 + rnd() * 0.6;
-      emitFlower(acc, fx, y + 0.06, fz, size, exposure(fx, fz), rnd);
+      // Lone blooms pick freely from the catalog — a stray poppy or cornflower
+      // among the daisies reads as a happy accident, never a planted row.
+      emitFlower(acc, pickSpecies(rnd), fx, y + 0.06, fz, size, lit, rnd, rnd() < 0.08);
     }
   }
 

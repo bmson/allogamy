@@ -208,13 +208,18 @@ export class Bird implements Updatable {
     // expressed in the bone's local frame (subtract the bone anchor).
     for (const sx of [-1, 1]) {
       const ring = new THREE.Mesh(ringGeo, ringMat);
-      ring.position.set(sx * 0.082, 0.01, 0.12);
+      ring.position.set(sx * 0.082, 0.022, 0.122);
+      ring.rotation.y = sx * 0.22; // sit the lid-ring flush on the curved cheek
       this.bHead.add(ring);
       const eye = new THREE.Mesh(eyeGeo, eyeMat);
-      eye.position.set(sx * 0.085, 0.01, 0.126);
+      eye.position.set(sx * 0.086, 0.022, 0.128);
+      eye.rotation.y = sx * 0.22;
       this.bHead.add(eye);
+      // the catch-light sits toward the sun (up-and-inboard of the sun vector) so
+      // both eyes carry the same warm glint — the single detail that makes a stylised
+      // creature read as ALIVE rather than a decoy.
       const glint = new THREE.Mesh(glintGeo, glintMat);
-      glint.position.set(sx * 0.09, 0.018, 0.136);
+      glint.position.set(sx * 0.09 - 0.006, 0.032, 0.14);
       this.bHead.add(glint);
     }
   }
@@ -320,6 +325,11 @@ export class Bird implements Updatable {
     const elbowZ = REST_ELBOW + 0.5 * dl * amp + 0.34 * Math.max(0, -drive) * amp;
     const wl = Math.sin(ph - WRIST_LAG);
     const wristZ = REST_WRIST + 0.44 * wl * amp + 0.2 * Math.max(0, -drive) * amp;
+    // feathering wash: the outboard membrane twists nose-down on the loaded
+    // downstroke to bite air, and eases flat (even nose-up) on the recovery so the
+    // primaries spill — this washout is the gesture that makes a flap read as WORK,
+    // not a flat paddle. A small spanwise twist on the wrist, mirrored per side below.
+    const washTwist = (0.12 * driveDown - 0.05 * Math.max(0, -drive)) * amp;
 
     for (const w of this.wings) {
       const s = w.sgn;
@@ -335,15 +345,28 @@ export class Bird implements Updatable {
       w.shoulder.rotation.y = s * sweep - 0.06 * bankWing; // inner wing sweeps back a touch
       w.elbow.rotation.z = s * elbowZ + 0.10 * bankWing;   // inner wing flexes (shorter span)
       w.wrist.rotation.z = s * wristZ;
+      // spanwise washout twist (about the wing's ±X axis): nose-down to grab air on
+      // the downstroke, spilling on recovery. Mirrored by `s` so both wings wash the
+      // same way relative to airflow, never tearing the continuous membrane.
+      w.wrist.rotation.x = s * washTwist;
 
       // primary-tip spring: the hand bone trails the wrist and overshoots, then
-      // settles — the long primaries' weight read on the continuous skin.
-      const a = STIFF_K * (wristZ - w.springPos) - DAMP_C * w.springVel;
-      w.springVel += a * dt;
-      w.springPos += w.springVel * dt;
+      // settles — the long primaries' weight read on the continuous skin. A
+      // sub-stepped semi-implicit integrator keeps the stiff spring stable at any
+      // frame rate (no blow-up on a long dt hitch), so the trail/settle stays smooth.
+      const sub = dt > 1 / 90 ? 2 : 1; // extra step only when frames are long
+      const h = dt / sub;
+      for (let k = 0; k < sub; k++) {
+        const a = STIFF_K * (wristZ - w.springPos) - DAMP_C * w.springVel;
+        w.springVel += a * h;
+        w.springPos += w.springVel * h;
+      }
       if (!isFinite(w.springPos)) { w.springPos = 0; w.springVel = 0; }
       w.hand.rotation.z = s * (w.springPos * 0.7);
-      w.hand.rotation.x = -0.05 + 0.5 * w.springVel; // feathering twist on reversal
+      // feathering twist on reversal: the long primaries flare open as the wing
+      // changes direction. Driven by the spring's *velocity* but clamped so a stiff
+      // overshoot can't snap the tip — it stays a supple flick, never a jitter.
+      w.hand.rotation.x = -0.05 + clamp(0.5 * w.springVel, -0.32, 0.32);
     }
 
     // --- whole-body motion: never rigid. `bob` carries the body AND both wings as
@@ -411,6 +434,7 @@ export class Bird implements Updatable {
     // the welded surface smooth (no kink). ---
     const n = this.bNeck;
     const nLen = n.length;
+    let neckPitchSum = 0; // running sum of the neck's X bend, for gaze stabilisation
     for (let i = 0; i < nLen; i++) {
       const lag = i * 0.5;
       const f = (i + 1) / nLen; // 0..1 outward along the neck
@@ -419,16 +443,26 @@ export class Bird implements Updatable {
       // vertical arc: neck eases the opposite way to the chest-tip so climb/dive
       // bows the whole body smoothly rather than rigidly tipping the head.
       n[i].rotation.x = wave * (0.7 + 0.3 * f) - 0.05 * mPitch * f;
+      neckPitchSum += n[i].rotation.x;
       // lateral arc: progressively curve the neck into the turn (front half sweeps in)
       n[i].rotation.y = yaw + 0.07 * mRoll * f + 0.03 * lead * f;
       // a touch of axial roll so the neck banks with the body (no twisting seam)
       n[i].rotation.z = -0.03 * mRoll * f;
     }
-    this.bHead.rotation.x = -0.04 * Math.sin(ph - 1.9) * amp + 0.02 * Math.sin(idle * 0.9)
-      - 0.06 * mPitch;                                   // head holds level-ish through the arc
+    // GAZE STABILISATION — the soul of a soaring bird. While the torso heaves with
+    // each beat and tips through the arc, the HEAD stays remarkably steady, eyes
+    // locked on the horizon. We sum the pitch the head has already inherited down
+    // the chain (chest tip + the neck's counter-arc) and cancel most of what's left,
+    // so the head holds level with calm intent rather than nodding with the body.
+    // The faint residual wingbeat nod (held to a whisper) keeps it alive, not rigid.
+    const inheritedPitch = this.bTorso.rotation.x + neckPitchSum;
+    this.bHead.rotation.x = -0.9 * inheritedPitch - 0.04 * mPitch
+      - 0.018 * Math.sin(ph - 1.9) * amp + 0.018 * Math.sin(idle * 0.9);
     this.bHead.rotation.y = -0.06 * mRoll + 0.025 * Math.sin(idle * 0.55); // glances into turns
-    this.bHead.rotation.z = 0.05 * mRoll; // slight head tilt into the bank
-    this.bJaw.rotation.x = 0.018 * driveDown; // bill cracks open under load
+    // counter-roll the head toward level: it tilts only slightly into the bank, the
+    // eyes staying near horizontal (a banking bird keeps its gaze on the world).
+    this.bHead.rotation.z = 0.05 * mRoll - 0.04 * this.bTorso.rotation.z;
+    this.bJaw.rotation.x = 0.018 * driveDown + 0.008 * (0.5 + 0.5 * Math.sin(idle * 0.5)); // bill cracks open under load + soft idle gape
 
     // --- tail: the rear extremity, with the biggest follow-through lag (steers +
     // counter-balances), fanning into the bank as a rudder and completing the body

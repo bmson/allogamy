@@ -119,24 +119,27 @@ export const WING_ATTACH = new THREE.Vector3(0.045, 0.18, 0.21);
 // the body's surface and shading — the seam at the root disappears.
 // ---------------------------------------------------------------------------
 function shoulderFairing(geo: THREE.BufferGeometry): THREE.BufferGeometry {
-  const pos = geo.attributes.position;
+  const pos = geo.attributes.position.array as Float32Array;
+  const count = geo.attributes.position.count;
   const cz = WING_ATTACH.z, cy = WING_ATTACH.y;
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+  // precompute the gaussian denominators once
+  const izz = 1 / (2 * 0.30 * 0.30), iyy = 1 / (2 * 0.22 * 0.22);
+  for (let i = 0; i < count; i++) {
+    const k = i * 3;
+    const x = pos[k], y = pos[k + 1], z = pos[k + 2];
     // bump envelope in (z,y): broad along the back-to-breast run, centred on the
     // shoulder height, so the swell is an elongated fleshy ridge, not a pimple.
-    const fz = Math.exp(-((z - cz) * (z - cz)) / (2 * 0.30 * 0.30));
-    const fy = Math.exp(-((y - cy) * (y - cy)) / (2 * 0.22 * 0.22));
-    const env = fz * fy;
+    const dz = z - cz, dy = y - cy;
+    const env = Math.exp(-(dz * dz) * izz - (dy * dy) * iyy);
     if (env < 1e-3) continue;
-    const s = Math.sign(x) || 1;
+    const s = x < 0 ? -1 : 1;
     // push the flank outward to form the shoulder shelf, and lift it a touch so the
     // shelf rises to meet the wing root sitting on top of it.
     const outward = 0.085 * env;
     const lift = 0.03 * env * smoothstep(0.0, 0.12, Math.abs(x)); // only the upper flank lifts
-    pos.setXYZ(i, x + s * outward, y + lift, z);
+    pos[k] = x + s * outward; pos[k + 1] = y + lift;
   }
-  pos.needsUpdate = true;
+  geo.attributes.position.needsUpdate = true;
   geo.computeVertexNormals();
   return geo;
 }
@@ -144,15 +147,21 @@ function shoulderFairing(geo: THREE.BufferGeometry): THREE.BufferGeometry {
 /** Push every vertex along its normal by layered noise for organic softness. */
 function roughen(geo: THREE.BufferGeometry, amp: number, freq: number, biasDown = 0): THREE.BufferGeometry {
   if (!geo.attributes.normal) geo.computeVertexNormals();
-  const pos = geo.attributes.position;
-  const nrm = geo.attributes.normal;
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+  // Direct typed-array access (no per-vertex accessor dispatch / bounds checks):
+  // these bakes run once at build time but over thousands of vertices, so the
+  // tight loop keeps geometry construction snappy on first chunk load.
+  const pos = geo.attributes.position.array as Float32Array;
+  const nrm = geo.attributes.normal.array as Float32Array;
+  const count = geo.attributes.position.count;
+  for (let i = 0; i < count; i++) {
+    const k = i * 3;
+    const x = pos[k], y = pos[k + 1], z = pos[k + 2];
+    const ny = nrm[k + 1];
     let d = fbm(x * freq, y * freq, z * freq) * amp;
-    if (biasDown > 0 && nrm.getY(i) < 0) d += biasDown * amp * -nrm.getY(i);
-    pos.setXYZ(i, x + nrm.getX(i) * d, y + nrm.getY(i) * d, z + nrm.getZ(i) * d);
+    if (biasDown > 0 && ny < 0) d += biasDown * amp * -ny;
+    pos[k] = x + nrm[k] * d; pos[k + 1] = y + ny * d; pos[k + 2] = z + nrm[k + 2] * d;
   }
-  pos.needsUpdate = true;
+  geo.attributes.position.needsUpdate = true;
   geo.computeVertexNormals();
   return geo;
 }
@@ -167,14 +176,15 @@ function paint(geo: THREE.BufferGeometry, fn: PaintFn): THREE.BufferGeometry {
   if (!geo.attributes.normal) geo.computeVertexNormals();
   geo.computeBoundingBox();
   const bb = geo.boundingBox!;
-  const pos = geo.attributes.position;
-  const nrm = geo.attributes.normal;
-  const n = pos.count;
+  const pos = geo.attributes.position.array as Float32Array;
+  const nrm = geo.attributes.normal.array as Float32Array;
+  const n = geo.attributes.position.count;
   const col = new Float32Array(n * 3);
   const c = new THREE.Color();
   for (let i = 0; i < n; i++) {
-    fn(c, pos.getX(i), pos.getY(i), pos.getZ(i), nrm.getX(i), nrm.getY(i), nrm.getZ(i), bb);
-    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+    const k = i * 3;
+    fn(c, pos[k], pos[k + 1], pos[k + 2], nrm[k], nrm[k + 1], nrm[k + 2], bb);
+    col[k] = c.r; col[k + 1] = c.g; col[k + 2] = c.b;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
   return geo;
@@ -188,19 +198,23 @@ export const sunlit = (nx: number, ny: number, nz: number, amt = 0.12) =>
 const C_WARM = new THREE.Color('#f3e6cf');
 const C_COOL = new THREE.Color('#8fa0bf');
 function brokenColour(geo: THREE.BufferGeometry, strength: number, freq: number): THREE.BufferGeometry {
-  const pos = geo.attributes.position;
-  const col = geo.attributes.color as THREE.BufferAttribute;
-  if (!col) return geo;
+  const posAttr = geo.attributes.position;
+  const colAttr = geo.attributes.color as THREE.BufferAttribute | undefined;
+  if (!colAttr) return geo;
+  const pos = posAttr.array as Float32Array;
+  const col = colAttr.array as Float32Array;
+  const count = posAttr.count;
   const c = new THREE.Color();
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-    const n = fbm(x * freq, y * freq + 3.1, z * freq + 7.7);
-    c.fromBufferAttribute(col, i);
+  for (let i = 0; i < count; i++) {
+    const k = i * 3;
+    const n = fbm(pos[k] * freq, pos[k + 1] * freq + 3.1, pos[k + 2] * freq + 7.7);
+    // raw read (no colour-management transform — these are already working-space)
+    c.r = col[k]; c.g = col[k + 1]; c.b = col[k + 2];
     if (n > 0) c.lerp(C_WARM, n * strength);
     else c.lerp(C_COOL, -n * strength);
-    col.setXYZ(i, c.r, c.g, c.b);
+    col[k] = c.r; col[k + 1] = c.g; col[k + 2] = c.b;
   }
-  col.needsUpdate = true;
+  colAttr.needsUpdate = true;
   return geo;
 }
 

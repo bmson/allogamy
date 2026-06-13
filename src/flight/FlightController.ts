@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { Input } from '../core/Input';
+import { ControlSource } from './PhoneControl';
 import { TerrainField } from '../world/TerrainField';
 
 // Weighty banking flight. Tilt (roll) banks the bird into a turn; pitch climbs
@@ -20,30 +20,31 @@ export class FlightController {
   roll = 0;
 
   private camera: THREE.PerspectiveCamera;
-  private input: Input;
+  private source: ControlSource;
   private field: TerrainField;
   private baseSpeed = 48;
   private camPos = new THREE.Vector3(0, 156, 14);
   private lookTarget = new THREE.Vector3();
   private tmp = new THREE.Vector3();
 
-  constructor(camera: THREE.PerspectiveCamera, input: Input, field: TerrainField) {
+  constructor(camera: THREE.PerspectiveCamera, source: ControlSource, field: TerrainField) {
     this.camera = camera;
-    this.input = input;
+    this.source = source;
     this.field = field;
   }
 
+  /** Hot-swap the active input source (keyboard ↔ phone gyro) without rebuilding. */
+  setSource(source: ControlSource) {
+    this.source = source;
+  }
+
   update(dt: number) {
-    const i = this.input;
+    // Continuous flight intent from whatever source is active (keyboard or phone gyro).
+    const c = this.source.read();
     const MAX_ROLL = 0.62;
     const MAX_PITCH = 0.42;
-
-    let targetRoll = 0;
-    if (i.left) targetRoll += MAX_ROLL;
-    if (i.right) targetRoll -= MAX_ROLL;
-    let targetPitch = 0;
-    if (i.up) targetPitch += MAX_PITCH; // nose up = climb
-    if (i.down) targetPitch -= MAX_PITCH; // nose down = dive
+    const targetRoll = c.roll * MAX_ROLL;
+    const targetPitch = c.pitch * MAX_PITCH;
 
     // Ease toward targets — this is where the "weight" lives.
     this.roll += (targetRoll - this.roll) * Math.min(1, dt * 2.1);

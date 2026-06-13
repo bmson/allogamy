@@ -41,18 +41,41 @@ const _col = new THREE.Color();
 const X = new THREE.Vector3(1, 0, 0);
 const Y = new THREE.Vector3(0, 1, 0);
 
+// Precomputed unit-ring trig for cylinder cross-sections. Built lazily per
+// segment count and cached, so emitCylinder never recomputes cos/sin nor
+// allocates per-vertex Vector3s in the (hot) prototype-build loop.
+const _ringCache = new Map<number, { cx: Float32Array; sx: Float32Array }>();
+function ringTrig(segs: number) {
+  let r = _ringCache.get(segs);
+  if (!r) {
+    const cx = new Float32Array(segs + 1);
+    const sx = new Float32Array(segs + 1);
+    for (let i = 0; i <= segs; i++) {
+      const a = (i / segs) * Math.PI * 2;
+      cx[i] = Math.cos(a);
+      sx[i] = Math.sin(a);
+    }
+    r = { cx, sx };
+    _ringCache.set(segs, r);
+  }
+  return r;
+}
+
 // Extra bark tones for gnarlier, less uniform trunks — a grey-lichen cast and a
 // warmer russet so not every trunk is the same chocolate brown.
 const BARK_GREY = new THREE.Color('#6e6a5a');
 const BARK_RUST = new THREE.Color('#7a5230');
 
+// Returns the SHARED `_col` scratch (no allocation) — every caller reads
+// `.r/.g/.b` immediately, before the next colour is computed, so a clone would
+// be pure churn across thousands of trunk segments during prototype build.
 function barkColor(rnd: () => number, tone = 0): THREE.Color {
   // `tone` (a per-tree personality, 0..1) biases the whole trunk toward grey
   // lichen or warm russet so trees don't all share one bark.
   _col.copy(palette.bark).lerp(palette.barkDark, rnd() * 0.6);
   if (tone < 0.33) _col.lerp(BARK_GREY, 0.18 + rnd() * 0.22);
   else if (tone > 0.66) _col.lerp(BARK_RUST, 0.15 + rnd() * 0.2);
-  return _col.offsetHSL((rnd() - 0.5) * 0.03, (rnd() - 0.5) * 0.08, (rnd() - 0.5) * 0.1).clone();
+  return _col.offsetHSL((rnd() - 0.5) * 0.03, (rnd() - 0.5) * 0.08, (rnd() - 0.5) * 0.1);
 }
 
 const clamp = THREE.MathUtils.clamp;
@@ -107,10 +130,17 @@ function foliageColor(rnd: () => number, type: TreeType, lit: number, warmth = 0
     s = s * (1 - golden) + (0.74 + lit * 0.1) * golden;
     l = l * (1 - golden) + (0.32 + lit * 0.28) * golden;
   }
-  return _col.setHSL(clamp(h, 0, 1), clamp(s, 0, 1), clamp(l, 0.04, 0.95)).clone();
+  // Returns the SHARED `_col` (no clone): the result is read straight into the
+  // colour buffer before the next dab is computed.
+  return _col.setHSL(clamp(h, 0, 1), clamp(s, 0, 1), clamp(l, 0.04, 0.95));
 }
 
-/** Append a tapered cylinder (flat-shaded) between a→b into the trunk arrays. */
+/** Append a tapered cylinder between a→b into the trunk arrays.
+ *
+ * Normals point outward along the (slightly cone-tilted) side so the bark
+ * catches the sun smoothly instead of reading as hard flat facets — and the
+ * whole ring is built from a cached trig table with NO per-vertex allocation,
+ * which is the bulk of the prototype-build cost. */
 function emitCylinder(
   tp: number[], tn: number[], tc: number[],
   a: THREE.Vector3, b: THREE.Vector3, ra: number, rb: number,
@@ -123,33 +153,39 @@ function emitCylinder(
   _up.copy(Math.abs(_dir.y) > 0.99 ? X : Y);
   _t1.crossVectors(_dir, _up).normalize();
   _t2.crossVectors(_dir, _t1).normalize();
+  const t1x = _t1.x, t1y = _t1.y, t1z = _t1.z;
+  const t2x = _t2.x, t2y = _t2.y, t2z = _t2.z;
+  const ax = a.x, ay = a.y, az = a.z;
+  const bx = b.x, by = b.y, bz = b.z;
+  // Side slope: the surface normal tilts along the axis as the radius tapers, so
+  // it isn't purely radial (a true cone normal) — subtle, but it keeps the
+  // taper from looking like a stack of rings under the directional light.
+  const slope = (ra - rb) / len;
+  const adx = _dir.x * slope, ady = _dir.y * slope, adz = _dir.z * slope;
+  const { cx: rc, sx: rs } = ringTrig(segs);
+  const cr = color.r, cg = color.g, cb = color.b;
 
   for (let i = 0; i < segs; i++) {
-    const a0 = (i / segs) * Math.PI * 2;
-    const a1 = ((i + 1) / segs) * Math.PI * 2;
-    const d0x = Math.cos(a0), d0y = Math.sin(a0);
-    const d1x = Math.cos(a1), d1y = Math.sin(a1);
-    // ring directions
-    const n0 = new THREE.Vector3().addScaledVector(_t1, d0x).addScaledVector(_t2, d0y);
-    const n1 = new THREE.Vector3().addScaledVector(_t1, d1x).addScaledVector(_t2, d1y);
-    const A0 = new THREE.Vector3().copy(a).addScaledVector(n0, ra);
-    const A1 = new THREE.Vector3().copy(a).addScaledVector(n1, ra);
-    const B0 = new THREE.Vector3().copy(b).addScaledVector(n0, rb);
-    const B1 = new THREE.Vector3().copy(b).addScaledVector(n1, rb);
-    pushTri(tp, tn, tc, A0, B0, B1, n0, n0, n1, color);
-    pushTri(tp, tn, tc, A0, B1, A1, n0, n1, n1, color);
+    const d0x = rc[i], d0y = rs[i];
+    const d1x = rc[i + 1], d1y = rs[i + 1];
+    // outward ring directions (radial), then add the axial tilt for the normal
+    const r0x = t1x * d0x + t2x * d0y, r0y = t1y * d0x + t2y * d0y, r0z = t1z * d0x + t2z * d0y;
+    const r1x = t1x * d1x + t2x * d1y, r1y = t1y * d1x + t2y * d1y, r1z = t1z * d1x + t2z * d1y;
+    let n0x = r0x + adx, n0y = r0y + ady, n0z = r0z + adz;
+    let n1x = r1x + adx, n1y = r1y + ady, n1z = r1z + adz;
+    const il0 = 1 / Math.hypot(n0x, n0y, n0z); n0x *= il0; n0y *= il0; n0z *= il0;
+    const il1 = 1 / Math.hypot(n1x, n1y, n1z); n1x *= il1; n1y *= il1; n1z *= il1;
+    // ring vertices
+    const A0x = ax + r0x * ra, A0y = ay + r0y * ra, A0z = az + r0z * ra;
+    const A1x = ax + r1x * ra, A1y = ay + r1y * ra, A1z = az + r1z * ra;
+    const B0x = bx + r0x * rb, B0y = by + r0y * rb, B0z = bz + r0z * rb;
+    const B1x = bx + r1x * rb, B1y = by + r1y * rb, B1z = bz + r1z * rb;
+    tp.push(A0x, A0y, A0z, B0x, B0y, B0z, B1x, B1y, B1z);
+    tn.push(n0x, n0y, n0z, n0x, n0y, n0z, n1x, n1y, n1z);
+    tp.push(A0x, A0y, A0z, B1x, B1y, B1z, A1x, A1y, A1z);
+    tn.push(n0x, n0y, n0z, n1x, n1y, n1z, n1x, n1y, n1z);
+    for (let k = 0; k < 6; k++) tc.push(cr, cg, cb);
   }
-}
-
-function pushTri(
-  tp: number[], tn: number[], tc: number[],
-  p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3,
-  n0: THREE.Vector3, n1: THREE.Vector3, n2: THREE.Vector3,
-  c: THREE.Color,
-) {
-  tp.push(p0.x, p0.y, p0.z, p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
-  tn.push(n0.x, n0.y, n0.z, n1.x, n1.y, n1.z, n2.x, n2.y, n2.z);
-  for (let k = 0; k < 3; k++) tc.push(c.r, c.g, c.b);
 }
 
 /** Tilt a direction by `angle` around a random azimuth, with an upward bias. */
@@ -208,14 +244,21 @@ function emitBlob(
       oy -= droop * radius * rimAo * rimAo * (oy < 0 ? 1.4 : 0.5);
     }
     fp.push(cx + ox, cy + oy, cz + oz);
-    fs.push(baseScale * (0.7 + rnd() * scaleVar));
-    // round leaf-clump dabs (aspect ≈ 1); orientation only jitters the silhouette
+    // Size couples weakly to depth in the canopy: the lit shell carries slightly
+    // bigger, bolder leaf-strokes while the shaded interior fills with smaller,
+    // denser dabs — a layered crown rather than uniform-sized confetti.
+    const shell = Math.sqrt(ox * ox + oy * oy + oz * oz) * inv; // 0 core .. 1 rim
+    fs.push(baseScale * (0.7 + rnd() * scaleVar) * (0.86 + 0.24 * shell));
+    // Leaf-clump dabs read as loose brush-marks: mostly round, but a fraction
+    // are pulled into short oval strokes (aspect up to ~1.5) with a free
+    // screen-space orientation so the crown shimmers as painted dabs, not discs.
+    // (aAngle is a 2-D billboard rotation, so a random angle is correct here.)
     fa.push(rnd() * Math.PI);
-    fasp.push(0.88 + rnd() * 0.26);
+    fasp.push(rnd() < 0.35 ? 1.12 + rnd() * 0.4 : 0.86 + rnd() * 0.26);
     // Baked canopy light → drives the colour: top-lit, sun-facing brightened,
     // rim catching light, interior in shade. No separate shade multiply.
     const topness = oy * inv * 0.5 + 0.5;
-    const aoR = Math.sqrt(ox * ox + oy * oy + oz * oz) * inv;
+    const aoR = shell; // distance-from-core, already computed above
     const sun = (ox * -0.5 + oz * -0.62) * inv;
     const lit = clamp(0.32 + litBias + 0.42 * topness + 0.18 * aoR + 0.12 * sun, 0, 1);
     const c = foliageColor(rnd, type, lit, warmth);

@@ -6,14 +6,19 @@ import {
 } from 'three/tsl';
 import { palette } from './palette';
 import { mulberry32 } from '../core/rng';
-import { FOG_NEAR, FOG_FAR } from '../config';
+import { uFogNear, uFogFar } from '../core/settings';
 
 // ── Drift ─────────────────────────────────────────────────────────────────
 // The emotional centrepiece: a quiet, ever-present weather of airborne life that
 // surrounds the bird wherever it flies. Petals, tiny leaves, luminous pollen
 // motes and a few butterflies — the literal sense of "allogamy", life crossing
-// the air. It is camera-anchored: a wrapping box (~120 m) centred on the camera,
-// so the field is seamless and never seen to begin or end.
+// the air. It is camera-anchored: a wrapping box centred on the camera, so the
+// field is seamless and never seen to begin or end.
+//
+// CURRENTLY UNWIRED: the sky drift was removed; this stays as a ready-to-enable
+// GROUND-LEVEL drift (a meadow-height weather of petals/pollen rather than a
+// full-height sky box) — hence the flattened vertical band below. `createDrift`
+// / `Drift` keep their shape so a caller can re-add `.object` + `.update()`.
 //
 // ART: flat painterly brush-stamps, ALL light baked into per-instance colour,
 // soft feathered dabs (the same language as the terrain/foliage splats). Sparse
@@ -22,11 +27,18 @@ import { FOG_NEAR, FOG_FAR } from '../config';
 // PERFORMANCE: one instanced draw for the whole motes/petals field and one tiny
 // instanced draw for the butterflies. ALL motion lives in the VERTEX shader via
 // the `time` node + a `uCamPos` uniform — no per-element CPU work per frame, the
-// CPU only writes two vec3 uniforms. Counts are bounded.
+// CPU only writes the uniforms. Counts are bounded; shared sub-expressions are
+// computed once and reused so the per-vertex ALU stays lean.
 
-// Half-extent of the wrap box around the camera (full box = 2 * HALF metres).
+// Half-extent of the wrap box around the camera, on the horizontal plane (full
+// box = 2 * HALF metres). The field wraps in X/Z as the bird flies.
 const BOX_HALF = 60;
 const BOX = BOX_HALF * 2;
+// Vertical band: ground-level drift lives in a SHALLOW slab around the camera
+// instead of the full 120 m cube — petals and pollen ride the meadow air, not
+// the sky. The slab still wraps so nothing is ever seen to begin or end.
+const BAND_HALF = 14; // metres above/below the camera the drift occupies
+const BAND = BAND_HALF * 2;
 
 // Bounded population. Kept deliberately sparse — this should feel like the air
 // is gently alive, not a blizzard.
@@ -72,22 +84,40 @@ const KIND_PETAL = 0;
 const KIND_LEAF = 1;
 const KIND_POLLEN = 2;
 
-// Shared uniforms (one set; both materials read them).
+// Shared uniforms (one set; both materials read them). Typed against the
+// concrete `UniformNode<type, value>` (Vector3 / Vector4 / number) rather than
+// the bare `ReturnType<typeof uniform>`, which collapses to an unusable overload
+// — the explicit node types are what keep the `.xyz` / `.w` swizzles available
+// in the shader graph below.
 interface DriftUniforms {
-  uCamPos: ReturnType<typeof uniform>;
-  uBurst: ReturnType<typeof uniform>; // xyz = puff centre, w = strength (decays)
-  uBurstT: ReturnType<typeof uniform>; // elapsed time captured at burst()
+  uCamPos: THREE.UniformNode<'vec3', THREE.Vector3>; // camera world position
+  uBurst: THREE.UniformNode<'vec4', THREE.Vector4>; // xyz = puff centre, w = strength (decays)
+  uBurstT: THREE.UniformNode<'float', number>; // elapsed time captured at burst()
 }
 
+// Terse aliases for the two TSL node shapes the wrap helper passes around — a
+// scalar (float) node and a vec3 node. Typing these (instead of `any`) keeps the
+// fluent vector math available and lets the helper read like the rest of the
+// graph.
+type FNode = THREE.Node<'float'>;
+type V3Node = THREE.Node<'vec3'>;
+
 /**
- * Wrap an animated world position into the box centred on the camera, so the
+ * Wrap an animated world position into the slab centred on the camera, so the
  * field tiles seamlessly: as the bird flies, instances that fall out the back
- * reappear ahead. Returns a vec3 node (world space).
+ * (or below) reappear ahead (or above). X/Z wrap on the wide BOX; Y wraps on the
+ * shallow ground-level BAND. Returns a vec3 node (world space).
  */
-function wrapToCamera(animated: any, uCamPos: any): any {
-  // (animated - cam + HALF) mod BOX  →  [0, BOX); shift back to [-HALF, HALF)
-  const rel = animated.sub(uCamPos).add(BOX_HALF);
-  const wrapped = mod(mod(rel, BOX).add(BOX), BOX).sub(BOX_HALF); // positive modulo
+function wrapToCamera(animated: V3Node, uCamPos: DriftUniforms['uCamPos']): V3Node {
+  const rel = animated.sub(uCamPos); // position relative to the camera
+  // positive modulo per axis: (rel + half) mod size → [0,size); shift to centre.
+  const wrapAxis = (v: FNode, half: number, size: number): FNode =>
+    mod(mod(v.add(half), size).add(size), size).sub(half);
+  const wrapped = vec3(
+    wrapAxis(rel.x, BOX_HALF, BOX),
+    wrapAxis(rel.y, BAND_HALF, BAND),
+    wrapAxis(rel.z, BOX_HALF, BOX),
+  );
   return wrapped.add(uCamPos);
 }
 
@@ -100,12 +130,15 @@ function makeMotesMaterial(u: DriftUniforms): THREE.MeshBasicNodeMaterial {
   mat.depthTest = true;
   mat.alphaTest = 0.4;
 
-  const aHome = attribute('aHome', 'vec3'); // home offset inside the box
-  const aScale = attribute('aScale', 'float'); // world size
-  const aColor = attribute('aColor', 'vec3'); // baked colour
-  const aSeed = attribute('aSeed', 'float'); // per-instance phase (0..1)
-  const aKind = attribute('aKind', 'float'); // KIND_*
-  const aAspect = attribute('aAspect', 'float'); // 1 = round; >1 = petal/leaf length
+  // Explicit `<'vec3'>` / `<'float'>` type args: `attribute(name, type)` infers
+  // its node type from the string param, which TS widens to `string` — losing the
+  // `.x` / `.mul` fluent API. Pinning the literal restores the vector node type.
+  const aHome = attribute<'vec3'>('aHome', 'vec3'); // home offset inside the box
+  const aScale = attribute<'float'>('aScale', 'float'); // world size
+  const aColor = attribute<'vec3'>('aColor', 'vec3'); // baked colour
+  const aSeed = attribute<'float'>('aSeed', 'float'); // per-instance phase (0..1)
+  const aKind = attribute<'float'>('aKind', 'float'); // KIND_*
+  const aAspect = attribute<'float'>('aAspect', 'float'); // 1 = round; >1 = petal/leaf length
 
   // Per-instance phases — several decorrelated seeds so no two motes share a
   // gait. (fract of a big multiple is a cheap independent random in the shader.)
@@ -166,7 +199,7 @@ function makeMotesMaterial(u: DriftUniforms): THREE.MeshBasicNodeMaterial {
   const sx = cos(spin).mul(spiralR);
   const sz = sin(spin).mul(spiralR);
 
-  let animated: any = vec3(
+  const base = vec3(
     aHome.x.add(dx).add(sx),
     aHome.y.add(dy),
     aHome.z.add(dz).add(sz),
@@ -185,9 +218,9 @@ function makeMotesMaterial(u: DriftUniforms): THREE.MeshBasicNodeMaterial {
   const pushAmt = burstFade.mul(within).mul(mix(float(2.0), float(7.0), isPollen));
   const push = toI.div(dist).mul(pushAmt);
   // lift the puff slightly (pollen rises on a breath)
-  animated = animated.add(vec3(push.x, push.y.add(pushAmt.mul(0.4)), push.z));
+  const animated = base.add(vec3(push.x, push.y.add(pushAmt.mul(0.4)), push.z));
 
-  // wrap the animated position into the camera-centred box
+  // wrap the animated position into the camera-centred slab
   const worldPos = wrapToCamera(animated, u.uCamPos);
 
   // ── flutter / tumble of the stamp itself ───────────────────────────────
@@ -251,19 +284,26 @@ function makeMotesMaterial(u: DriftUniforms): THREE.MeshBasicNodeMaterial {
   // lens, plus the same aerial-perspective wash the splats use at distance. ──
   // catch-the-light: when a flat dab swings face-on (faceOn → 1) it briefly
   // glints; edge-on it dims. A quiet shimmer that makes the tumble feel sunlit.
-  const glint = mix(float(1.0), mix(float(0.62), float(1.18), pow(faceOn, float(1.5))),
-    oneMinus(isPollen));
+  // Pollen gets a small steady self-glow instead (it should always catch bloom).
+  const tumbleGlint = mix(float(0.6), float(1.22), pow(faceOn, float(1.5)));
+  const glint = mix(float(1.12), tumbleGlint, oneMinus(isPollen));
   const dab = oneMinus(edge.mul(0.18)).sub(midrib);
   const depth = centerView.z.negate();
-  // soft near fade: hide the closest few metres so things appear out of the haze
+  // soft near fade: hide the closest few metres so things appear out of the air
+  // rather than snapping into the lens (close billboards read as ugly streaks).
   const nearFade = smoothstep(float(1.5), float(7.0), depth);
-  // far wash into the air tone
-  const fogF = smoothstep(float(FOG_NEAR), float(FOG_FAR), depth);
+  // soft far fade: dissolve instances at the back of the wrap box so the seam at
+  // the slab edge melts into the air instead of popping as the bird flies. Tied
+  // to the horizontal box extent (a touch under BOX_HALF) so it's always covered.
+  const farFade = oneMinus(smoothstep(float(BOX_HALF * 0.72), float(BOX_HALF), depth));
+  // far wash toward the air tone (live fog uniforms, same graph the splats use).
+  const fogF = smoothstep(uFogNear, uFogFar, depth);
   const air = vec3(palette.air.r, palette.air.g, palette.air.b);
   const shaded = aColor.mul(dab).mul(glint);
   mat.colorNode = mix(shaded, air, fogF.mul(0.5));
-  // fold the near fade into opacity so close motes dissolve (alphaTest culls them)
-  mat.opacityNode = oneMinus(edge).mul(nearFade);
+  // fold both fades into opacity so close + far motes dissolve (alphaTest culls
+  // them once they drop below the cutout — no hard edges, no per-frame sort).
+  mat.opacityNode = oneMinus(edge).mul(nearFade).mul(farFade);
 
   return mat;
 }
@@ -278,11 +318,11 @@ function makeButterflyMaterial(u: DriftUniforms): THREE.MeshBasicNodeMaterial {
   mat.alphaTest = 0.4;
   mat.side = THREE.DoubleSide;
 
-  const aHome = attribute('aHome', 'vec3');
-  const aScale = attribute('aScale', 'float');
-  const aColor = attribute('aColor', 'vec3');
-  const aSeed = attribute('aSeed', 'float');
-  const aWing = attribute('aWing', 'float'); // -1 = left wing, +1 = right wing
+  const aHome = attribute<'vec3'>('aHome', 'vec3');
+  const aScale = attribute<'float'>('aScale', 'float');
+  const aColor = attribute<'vec3'>('aColor', 'vec3');
+  const aSeed = attribute<'float'>('aSeed', 'float');
+  const aWing = attribute<'float'>('aWing', 'float'); // -1 = left wing, +1 = right wing
 
   const ph = aSeed.mul(6.2831);
   const tt = time;
@@ -293,8 +333,10 @@ function makeButterflyMaterial(u: DriftUniforms): THREE.MeshBasicNodeMaterial {
     .add(sin(tt.mul(0.11).add(ph.mul(1.7))).mul(wanderR.mul(0.4)));
   const wz = cos(tt.mul(0.19).add(ph)).mul(wanderR)
     .add(cos(tt.mul(0.09).add(ph.mul(1.3))).mul(wanderR.mul(0.4)));
-  // slow vertical bob + a very gentle settle so they never sink out of the box
-  const wy = sin(tt.mul(0.37).add(ph)).mul(3.0);
+  // slow vertical bob — kept inside the shallow ground band so butterflies stay
+  // at meadow height rather than climbing out of the slab (the wrap handles the
+  // rest, but a smaller bob keeps them visibly skimming the flowers).
+  const wy = sin(tt.mul(0.37).add(ph)).mul(BAND_HALF * 0.55);
 
   const animated = vec3(aHome.x.add(wx), aHome.y.add(wy), aHome.z.add(wz));
   const worldPos = wrapToCamera(animated, u.uCamPos);
@@ -329,15 +371,19 @@ function makeButterflyMaterial(u: DriftUniforms): THREE.MeshBasicNodeMaterial {
   const wingMask = float(1.0)
     .sub(smoothstep(float(0.55), float(1.0), px)) // taper to the tip
     .mul(float(1.0).sub(smoothstep(float(0.5), float(1.0), abs(py)))); // chord falloff
-  mat.opacityNode = wingMask;
 
   // baked colour, brighter toward the wing root (catch the bloom), with fog wash
   const lit = float(1.0).sub(px.mul(0.25));
   const depth = centerView.z.negate();
-  const fogF = smoothstep(float(FOG_NEAR), float(FOG_FAR), depth);
+  // same near/far dissolve as the motes so butterflies fade in/out of the slab
+  // edges instead of popping, and never streak right in the lens.
+  const nearFade = smoothstep(float(2.0), float(8.0), depth);
+  const farFade = oneMinus(smoothstep(float(BOX_HALF * 0.72), float(BOX_HALF), depth));
+  const fogF = smoothstep(uFogNear, uFogFar, depth);
   const air = vec3(palette.air.r, palette.air.g, palette.air.b);
   const shaded = aColor.mul(lit);
   mat.colorNode = mix(shaded, air, fogF.mul(0.5));
+  mat.opacityNode = wingMask.mul(nearFade).mul(farFade);
 
   return mat;
 }
@@ -375,9 +421,11 @@ export function createDrift(opts: DriftOptions = {}): Drift {
   const c = new THREE.Color();
   let w = 0;
   const place = (kind: number) => {
-    // home offset anywhere in the box (relative to camera; wrap keeps it tiling)
+    // home offset relative to the camera; the wrap keeps it tiling seamlessly.
+    // X/Z fill the wide box, Y fills only the shallow ground-level band so the
+    // drift hugs meadow height instead of a full-height sky cube.
     homes[w * 3] = (rnd() - 0.5) * BOX;
-    homes[w * 3 + 1] = (rnd() - 0.5) * BOX;
+    homes[w * 3 + 1] = (rnd() - 0.5) * BAND;
     homes[w * 3 + 2] = (rnd() - 0.5) * BOX;
     seeds[w] = rnd();
     kinds[w] = kind;
@@ -455,8 +503,9 @@ export function createDrift(opts: DriftOptions = {}): Drift {
   let bw = 0;
   for (let i = 0; i < nButter; i++) {
     // a shared body home + seed for the pair, so both wings track together
+    // (X/Z across the wide box, Y within the shallow ground band).
     const hx = (rnd() - 0.5) * BOX;
-    const hy = (rnd() - 0.5) * BOX;
+    const hy = (rnd() - 0.5) * BAND;
     const hz = (rnd() - 0.5) * BOX;
     const seed = rnd();
     const scale = 1.4 + rnd() * 1.1; // larger than motes

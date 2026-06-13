@@ -2,17 +2,38 @@ import * as THREE from 'three/webgpu';
 import { mulberry32, hash2 } from '../core/rng';
 import { TerrainField } from './TerrainField';
 import { SplatLayer } from '../render/SplatMaterial';
-import { CHUNK_SIZE, WORLD_SEED } from '../config';
+import { palette } from '../render/palette';
+import { CHUNK_SIZE, WORLD_SEED, SUN_DIR } from '../config';
 
 // Leaves blowing along the ground BENEATH the trees — the airborne "confetti"
 // drift was lifted out of the sky and grounded here. These are ordinary splat
 // strokes (so they merge into the chunk's single splat draw call and sway with
-// the shared wind), but tuned to read as wind-stirred leaf litter: low to the
-// ground, leaf-coloured (green turning to amber/russet), elongated, with a high
-// sway weight so the breeze carries them. They gather where woodland is dense
-// (under canopies) and only a few stray into the open — kept subtle, not a storm.
+// the shared wind), but tuned to read as wind-stirred leaf litter rather than a
+// uniform speckle:
+//  - they GATHER into little wind-drifted clutches (a leaf pile, not lone flecks),
+//    biased to settle where the canopy is densest — fallen from the wood above;
+//  - their COLOUR echoes the foliage they dropped from: greener under light
+//    woodland turning to amber/russet litter under the deep, old, shaded stands;
+//  - they catch the same SUN the turf does (baked exposure), so they sit IN the
+//    light instead of floating as flat decals;
+//  - their stroke ANGLE streaks along the prevailing wind axis (with tumble
+//    jitter) so the field reads as litter being CARRIED, not laid in a grid;
+//  - most hug the ground in a thin carpet; only a stray few are lifted mid-gust.
+// They keep a high sway weight (aWind>0) so the shared breeze tumbles them, and
+// stay subtle & bounded — woodland litter, never a storm. Seeded from
+// (cx, cz, WORLD_SEED) on a private salt so they're deterministic and seamless
+// and can't perturb the terrain / tree / flower layouts.
 
 const clamp = THREE.MathUtils.clamp;
+const _col = new THREE.Color();
+
+// Prevailing wind axis in the XZ plane, matched to the splat shader's gust (which
+// pushes +X dominant, half on +Z). Leaf strokes streak along this so the litter
+// reads as blowing in one coherent direction, not tumbling at random angles.
+const WIND_ANGLE = Math.atan2(0.5, 1.0); // ≈ 0.46 rad, the gust's XZ heading
+// Normalised sun azimuth (same convention as turf / flowers): leaves baked with
+// this share the meadow's light. SUN_DIR is [x, y, z]; we use its horizontal cast.
+const SUNX = SUN_DIR[0], SUNZ = SUN_DIR[2];
 
 export function scatterLeaves(field: TerrainField, cx: number, cz: number): SplatLayer | null {
   const S = CHUNK_SIZE;
@@ -24,7 +45,6 @@ export function scatterLeaves(field: TerrainField, cx: number, cz: number): Spla
 
   const cen: number[] = [], scl: number[] = [], col: number[] = [];
   const wnd: number[] = [], ang: number[] = [], asp: number[] = [];
-  const c = new THREE.Color();
 
   const cells = 16;
   const cs = S / cells;
@@ -32,32 +52,86 @@ export function scatterLeaves(field: TerrainField, cx: number, cz: number): Spla
     for (let gx = 0; gx < cells; gx++) {
       const x = ox + (gx + rnd()) * cs;
       const z = oz + (gz + rnd()) * cs;
-      const surf = field.surface(x, z);
-      if (surf.path > 0.3 || surf.rock > 0.5 || surf.slope > 0.6) continue;
-      const dens = field.forest(x, z); // 0 open .. 1 deep woodland
-      // gather under/near trees; only a few drift into the open. Subtle.
+
+      // Density gate FIRST: forest() is a single fbm, whereas surface() does a
+      // central-difference normal + warped path + two rock octaves (~20× the work).
+      // Most open-ground cells reject here, so we skip the expensive surface eval on
+      // the overwhelming majority. Leaves gather under/near trees; only a stray few
+      // drift into the open. Subtle. (dens: 0 open .. 1 deep woodland.)
+      const dens = field.forest(x, z);
       if (rnd() > 0.05 + dens * 0.55) continue;
 
+      // Now the costly surface eval, only for cells that already passed the gate.
+      const surf = field.surface(x, z);
+      if (surf.path > 0.3 || surf.rock > 0.5 || surf.slope > 0.6) continue;
+
       const y = field.height(x, z);
-      const n = 1 + ((rnd() * 2) | 0); // 1-2 leaves per accepted cell
-      for (let i = 0; i < n; i++) {
-        const px = x + (rnd() - 0.5) * cs * 0.8;
-        const pz = z + (rnd() - 0.5) * cs * 0.8;
+      // Baked exposure from the surface normal (same meadow-sun term as the turf and
+      // the flowers), so litter sits in the landscape's light. nx²+nz² gives ny back
+      // without a second normal eval.
+      const ny = Math.sqrt(Math.max(0, 1 - surf.nx * surf.nx - surf.nz * surf.nz));
+      const lit = clamp(0.5 + 0.5 * (surf.nx * SUNX + ny * 0.55 + surf.nz * SUNZ), 0, 1);
 
-        // Leaf colour: mostly green-turning, some warm amber, a few russet/brown.
-        const t = rnd();
+      // A small wind-drifted clutch rather than a uniform fleck per cell: leaves pile
+      // up where they settle. Denser woodland drops a slightly fuller pile. The
+      // clutch is ELONGATED along the wind axis so it reads as a streaked drift, not
+      // a round dot — leaves raked into a comet-tail by the breeze.
+      const clutch = 2 + ((rnd() * (2 + dens * 4)) | 0); // 2..7, fuller in deep wood
+      const cwx = Math.cos(WIND_ANGLE), cwz = Math.sin(WIND_ANGLE); // along-wind unit
+      const drift = cs * 0.55; // clutch length scale
+      for (let i = 0; i < clutch; i++) {
+        // Offset along the wind (long) and across it (short) → a feathered streak.
+        const along = (rnd() - 0.5) * 2 * drift;
+        const across = (rnd() - 0.5) * drift * 0.45;
+        const px = x + cwx * along - cwz * across;
+        const pz = z + cwz * along + cwx * across;
+
+        // Leaf colour echoes the canopy it fell from: light woodland stays greenish;
+        // deep, old, shaded stands have turned to amber/russet litter. `turn` rises
+        // with density (more turned the deeper the wood) and a touch with shade.
+        const turn = clamp(dens * 0.55 + (1 - lit) * 0.25 + rnd() * 0.35, 0, 1);
         let h: number, s: number, l: number;
-        if (t < 0.5) { h = 0.27 - rnd() * 0.06; s = 0.46 + rnd() * 0.1; l = 0.38 + rnd() * 0.12; }
-        else if (t < 0.8) { h = 0.11 + rnd() * 0.03; s = 0.6 + rnd() * 0.1; l = 0.44 + rnd() * 0.1; }
-        else { h = 0.05 + rnd() * 0.03; s = 0.55 + rnd() * 0.1; l = 0.34 + rnd() * 0.08; }
-        c.setHSL(h, clamp(s, 0, 1), clamp(l, 0.1, 0.9));
+        if (turn < 0.45) {
+          // green-turning: a yellow-green leaf just past its prime, echoing foliage.
+          h = 0.26 - rnd() * 0.05 - turn * 0.04;
+          s = 0.5 + rnd() * 0.12;
+          l = 0.34 + rnd() * 0.12;
+        } else if (turn < 0.78) {
+          // warm amber / ochre — the bulk of the autumn litter.
+          h = 0.11 + rnd() * 0.035;
+          s = 0.62 + rnd() * 0.12;
+          l = 0.4 + rnd() * 0.1;
+        } else {
+          // deep russet / rust-brown — the oldest, darkest fallen leaves.
+          h = 0.045 + rnd() * 0.03;
+          s = 0.55 + rnd() * 0.12;
+          l = 0.3 + rnd() * 0.08;
+        }
+        // Bake the meadow light: warm & lift in sun, cool & deepen in shade — the
+        // same coupling the turf and flowers use, so litter shares the scene's light.
+        l = clamp(l + (lit - 0.5) * 0.18, 0.12, 0.82);
+        s = clamp(s * (0.92 + (1 - lit) * 0.14), 0, 1);
+        _col.setHSL(clamp(h, 0, 1), s, l);
+        // a faint cool shadow wash on the most shaded litter, never to black.
+        if (lit < 0.4) _col.lerp(palette.shadow, (0.4 - lit) * 0.18);
 
-        cen.push(px, y + 0.25 + rnd() * 1.3, pz); // low to the ground, a few lifted by wind
-        scl.push(0.5 + rnd() * 0.7);
-        col.push(c.r, c.g, c.b);
-        wnd.push(1.0 + rnd() * 0.7); // blow strongly — the breeze carries leaves most
-        ang.push(rnd() * Math.PI); // random orientation → tumbling strokes
-        asp.push(0.75 + rnd() * 0.5); // elongated leaf-stroke
+        // Height: most leaves hug the ground in a thin carpet; a stray few catch the
+        // gust and lift. Square the roll so the lifted ones are RARE (carpet-biased),
+        // and let denser piles sit a hair lower (settled, packed litter).
+        const lift = rnd() * rnd(); // 0..1, biased low
+        const yy = y + 0.12 + lift * 1.35 - dens * 0.06;
+
+        cen.push(px, yy, pz);
+        scl.push(0.42 + rnd() * 0.6);
+        col.push(_col.r, _col.g, _col.b);
+        // Lifted leaves are mid-gust and sway hardest; settled litter sways less so it
+        // reads as resting on the turf rather than levitating. Always >0 (vegetation).
+        wnd.push(0.55 + lift * 0.95 + rnd() * 0.35);
+        // Streak the stroke along the wind axis with a tumble jitter — litter being
+        // CARRIED in one direction, lifted leaves tumbling more freely than settled.
+        ang.push(WIND_ANGLE + (rnd() - 0.5) * (0.7 + lift * 1.6));
+        // Elongated leaf-stroke; lifted/tumbling ones stretch a touch more.
+        asp.push(0.85 + rnd() * 0.45 + lift * 0.35);
       }
     }
   }

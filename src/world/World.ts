@@ -8,6 +8,36 @@ import { CHUNK_SIZE, LOAD_RADIUS, UNLOAD_RADIUS, WORLD_SEED } from '../config';
 // Streams chunks around the bird. Generation is time-sliced (a few chunks per
 // frame, nearest first) and reaches well beyond the fog, so terrain is always
 // finished and faded-in before it could enter view — nothing changes on screen.
+//
+// Perf shape: the heavy bookkeeping (ring scan, unload sweep, queue prune) only
+// runs when the bird crosses a chunk boundary — on every other frame update() is
+// an O(1) no-op. Live chunks are keyed by a packed integer (no per-frame string
+// allocation / parsing), and the build queue is kept nearest-first only when it
+// has actually changed, so the hot path stays allocation-free and hitch-free.
+
+// Chunk coords are packed into one integer key so the live set is a plain numeric
+// Map (no string concat per cell per frame, no indexOf/slice to decode). Coords
+// are biased into a non-negative range and packed at 16 bits each — the streamed
+// world never strays anywhere near ±32k chunks (that is ±5.2 million metres).
+const KEY_BIAS = 0x8000; // 32768 — centres the signed range in [0, 65535]
+function packKey(cx: number, cz: number): number {
+  return ((cx + KEY_BIAS) << 16) | (cz + KEY_BIAS);
+}
+// Recover the signed chunk coords from a packed key (unsigned shift to dodge the
+// sign bit, since the high half can set bit 31). Lets the unload sweep range-test
+// live chunks without storing cx/cz separately or reaching into Chunk's internals.
+function keyCx(key: number): number {
+  return (key >>> 16) - KEY_BIAS;
+}
+function keyCz(key: number): number {
+  return (key & 0xffff) - KEY_BIAS;
+}
+
+interface QueueItem {
+  cx: number;
+  cz: number;
+  key: number;
+}
 
 export class World {
   private scene: THREE.Scene;
@@ -20,10 +50,18 @@ export class World {
   private protos: TreeProto[];
   private bushProtos: TreeProto[];
 
-  private chunks = new Map<string, Chunk>();
-  private queued = new Set<string>();
-  private queue: { cx: number; cz: number; key: string }[] = [];
+  private chunks = new Map<number, Chunk>();
+  private queued = new Set<number>();
+  private queue: QueueItem[] = [];
   private focus = new THREE.Vector3();
+
+  // The chunk cell the bird currently sits in. Bookkeeping only re-runs when this
+  // changes; -0x7fffffff is an impossible cell so the very first update() fires.
+  private lastCcx = -0x7fffffff;
+  private lastCcz = -0x7fffffff;
+  // Set when the queue's membership changes, so tickGeneration only re-sorts the
+  // nearest-first order when it can have actually shifted (not every frame).
+  private queueDirty = false;
 
   constructor(scene: THREE.Scene, field: TerrainField) {
     this.scene = scene;
@@ -67,40 +105,76 @@ export class World {
     this.focus.copy(pos);
     const ccx = Math.floor(pos.x / CHUNK_SIZE);
     const ccz = Math.floor(pos.z / CHUNK_SIZE);
-    const r2 = LOAD_RADIUS * LOAD_RADIUS + 1;
+    // Within a single chunk cell the needed disc, the unload set, and the queue's
+    // membership are all identical frame to frame — so the whole sweep is skipped
+    // until the bird actually crosses into a new cell. tickGeneration still drains
+    // the queue every frame; this only gates the (allocation-heavy) re-planning.
+    if (ccx === this.lastCcx && ccz === this.lastCcz) return;
+    this.lastCcx = ccx;
+    this.lastCcz = ccz;
+    // The bird crossed into a new cell, so any pending work should be re-ordered
+    // nearest-first toward the new position before the next build slice.
+    if (this.queue.length) this.queueDirty = true;
 
+    // ---- queue any missing chunk inside the load disc, nearest cells first ----
+    const r2 = LOAD_RADIUS * LOAD_RADIUS + 1;
     for (let dz = -LOAD_RADIUS; dz <= LOAD_RADIUS; dz++) {
       for (let dx = -LOAD_RADIUS; dx <= LOAD_RADIUS; dx++) {
         if (dx * dx + dz * dz > r2) continue;
         const cx = ccx + dx;
         const cz = ccz + dz;
-        const key = cx + ',' + cz;
+        const key = packKey(cx, cz);
         if (this.chunks.has(key) || this.queued.has(key)) continue;
         this.queued.add(key);
         this.queue.push({ cx, cz, key });
+        this.queueDirty = true;
       }
     }
 
+    // ---- free live chunks that fell out of the (Chebyshev) unload box ----
     for (const [key, ch] of this.chunks) {
-      const ci = key.indexOf(',');
-      const cx = +key.slice(0, ci);
-      const cz = +key.slice(ci + 1);
-      if (Math.abs(cx - ccx) > UNLOAD_RADIUS || Math.abs(cz - ccz) > UNLOAD_RADIUS) {
+      if (Math.abs(keyCx(key) - ccx) > UNLOAD_RADIUS || Math.abs(keyCz(key) - ccz) > UNLOAD_RADIUS) {
         ch.dispose(this.scene);
         this.chunks.delete(key);
       }
     }
+
+    // ---- drop queued-but-unbuilt chunks that drifted out of range ----
+    // On a fast bird, cells queued a few crossings ago can leave the load disc
+    // before we ever reach them. Building those would burn a whole frame slice on
+    // a chunk we'd unload immediately — and an un-pruned queue/queued set leaks.
+    // Compact in place (single pass, no allocation) so the survivors stay queued.
+    let kept = 0;
+    for (let i = 0; i < this.queue.length; i++) {
+      const item = this.queue[i];
+      if (Math.abs(item.cx - ccx) > LOAD_RADIUS || Math.abs(item.cz - ccz) > LOAD_RADIUS) {
+        this.queued.delete(item.key);
+        this.queueDirty = true;
+        continue;
+      }
+      this.queue[kept++] = item;
+    }
+    this.queue.length = kept;
   }
 
   /** Build up to `max` queued chunks this frame, nearest to the bird first. */
   tickGeneration(max = 3) {
     if (this.queue.length === 0) return;
-    const fx = this.focus.x;
-    const fz = this.focus.z;
-    this.queue.sort((a, b) => dist2(a, fx, fz) - dist2(b, fx, fz));
+    // Re-order nearest-first only when the queue's membership has changed since the
+    // last build. The bird moves smoothly, so re-planning that happens at most once
+    // per chunk-crossing is enough to keep "nearest first" honest, and we skip the
+    // O(n log n) sort on the frames in between.
+    if (this.queueDirty) {
+      const fx = this.focus.x;
+      const fz = this.focus.z;
+      this.queue.sort((a, b) => dist2(b, fx, fz) - dist2(a, fx, fz));
+      this.queueDirty = false;
+    }
     let n = 0;
+    // The queue is sorted farthest-first, so the nearest chunks sit at the tail and
+    // pop() drains them in O(1) without the O(n) shift() did on every build.
     while (n < max && this.queue.length) {
-      const { cx, cz, key } = this.queue.shift()!;
+      const { cx, cz, key } = this.queue.pop()!;
       this.queued.delete(key);
       if (this.chunks.has(key)) continue;
       const ch = new Chunk(
@@ -124,7 +198,7 @@ export class World {
     const ccz = Math.floor(this.focus.z / CHUNK_SIZE);
     for (let dz = -1; dz <= 1; dz++) {
       for (let dx = -1; dx <= 1; dx++) {
-        if (!this.chunks.has(ccx + dx + ',' + (ccz + dz))) return false;
+        if (!this.chunks.has(packKey(ccx + dx, ccz + dz))) return false;
       }
     }
     return true;
