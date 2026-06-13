@@ -1,7 +1,8 @@
 import * as THREE from 'three/webgpu';
 import { palette } from '../render/palette';
 import { buildPostProcessing } from '../render/post';
-import { FOG_NEAR, FOG_FAR, CAM_FOV, CAM_FAR, SUN_DIR } from '../config';
+import { FOG_NEAR, FOG_FAR, CAM_FOV, CAM_FAR, SUN_DIR, WORLD_SEED } from '../config';
+import { createDrift, Drift } from '../render/petals';
 
 export interface Updatable {
   update(dt: number, t: number): void;
@@ -35,6 +36,7 @@ export class Engine {
   private clock = new THREE.Clock();
   private updaters: Updatable[] = [];
   private postFX!: THREE.PostProcessing;
+  private drift!: Drift;
 
   async init() {
     THREE.ColorManagement.enabled = true;
@@ -72,6 +74,12 @@ export class Engine {
     // Impressionist post: bloom halation + no-blacks Monet grade.
     this.postFX = buildPostProcessing(renderer, scene, this.camera).post;
 
+    // Camera-anchored drift of petals/leaves/pollen/butterflies — the ever-present
+    // airborne life that surrounds the bird (the literal allogamy). Its per-frame
+    // cost is one uniform write; all motion is GPU vertex work.
+    this.drift = createDrift({ seed: WORLD_SEED });
+    scene.add(this.drift.object);
+
     window.addEventListener('resize', () => this.onResize());
   }
 
@@ -93,6 +101,7 @@ export class Engine {
     const dt = Math.min(this.clock.getDelta(), 0.05);
     const t = this.clock.elapsedTime;
     for (const u of this.updaters) u.update(dt, t);
+    this.drift.update(this.camera.position, t);
     this.postFX.render(); // bloom + grade (replaces renderer.render)
   }
 }

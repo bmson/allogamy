@@ -7,11 +7,11 @@ export const WORLD_SEED = 1337;
 export const CHUNK_SIZE = 160; // metres per chunk edge
 export const CHUNK_RES = 36; // heightfield quads per chunk edge (~4.4 m cells)
 
-// Streaming radii, measured in chunks from the bird. The dense haze (below) fully
-// hides everything past ~480 m, so we needn't generate as far — fewer live chunks,
-// better perf, and the streaming frontier is born inside the fog and never pops.
-export const LOAD_RADIUS = 4; // generate out to this ring (4 * 160 = 640 m)
-export const UNLOAD_RADIUS = 5; // keep until this ring, then free
+// Streaming radii, measured in chunks from the bird. LOAD edge (5 * 160 = 800 m)
+// sits comfortably beyond FOG_FAR (560 m), so new chunks are born ~240 m deep in
+// the haze — invisible — and have ~5 s of flight to generate before they emerge.
+export const LOAD_RADIUS = 5; // generate out to this ring (5 * 160 = 800 m)
+export const UNLOAD_RADIUS = 6; // keep until this ring, then free
 
 // Splat density per chunk — high, for the wall-to-wall painted carpet. Tune live
 // via SPLAT_DENSITY without touching code if perf needs it.
@@ -23,11 +23,12 @@ export const WIND_STRENGTH = 1.1;
 
 // Fog hides the streaming frontier: new chunks are born beyond FOG_FAR (inside
 // the haze) and never visibly pop in. LOAD_RADIUS*CHUNK_SIZE must exceed FOG_FAR.
-// Dense and CLOSE, like the reference (it fogged a 130 m world by 165 m): the cool
-// grey-blue haze sets in early, muting and unifying the whole field into one
-// luminous painting and giving the receding hills real atmospheric depth.
-export const FOG_NEAR = 110;
-export const FOG_FAR = 480;
+// Haze onset pushed OUT so a clear, saturated foreground band reads first and then
+// recedes into mist — that dark→light, sharp→soft gradient is what gives the
+// landscape depth. Too close (110) washed the mid-field flat. The far plane still
+// dissolves the hills and the streaming frontier into the cool grey-blue haze.
+export const FOG_NEAR = 200;
+export const FOG_FAR = 560;
 
 // Camera. Narrower fov → compressed, painting-like framing (cf. reference).
 export const CAM_FOV = 54;

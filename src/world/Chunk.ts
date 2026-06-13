@@ -6,6 +6,8 @@ import { buildSplatGeometry } from '../render/SplatMaterial';
 import { buildBoulders } from './rock';
 import { scatterTrees, TreeProto } from './tree';
 // (TreeProto covers both trees and bushes)
+import { scatterFlowers } from './flowers';
+import { scatterWeeds } from './weeds';
 import { CHUNK_SIZE, CHUNK_RES, SPLATS_PER_CHUNK, SPLAT_DENSITY, WORLD_SEED, SUN_DIR } from '../config';
 
 // Normalised sun direction, for baking slope shading into the splats.
@@ -28,6 +30,8 @@ export class Chunk {
   private rockGeo: THREE.BufferGeometry | null = null;
   private trunkGeo: THREE.BufferGeometry | null = null;
   private folGeo: THREE.BufferGeometry | null = null;
+  private flowerGeo: THREE.BufferGeometry | null = null;
+  private weedGeo: THREE.BufferGeometry | null = null;
 
   constructor(
     cx: number,
@@ -233,6 +237,40 @@ export class Chunk {
       fol.frustumCulled = true;
       this.group.add(fol);
     }
+
+    // ---- wild flowers: clustered bright blooms on open grass ----
+    const flowers = scatterFlowers(field, cx, cz);
+    if (flowers) {
+      const flg = buildSplatGeometry(
+        flowers.centers, flowers.scales, flowers.colors,
+        flowers.winds, flowers.angles, flowers.aspects,
+      );
+      flg.boundingSphere = new THREE.Sphere(
+        new THREE.Vector3(ox + S / 2, (minY + maxY) / 2, oz + S / 2),
+        Math.hypot(S * 0.72, (maxY - minY) / 2 + 4) + 4,
+      );
+      this.flowerGeo = flg;
+      const blooms = new THREE.Mesh(flg, pointMat);
+      blooms.frustumCulled = true;
+      this.group.add(blooms);
+    }
+
+    // ---- undergrowth: plush ground cover between turf and bushes ----
+    const weeds = scatterWeeds(field, cx, cz);
+    if (weeds) {
+      const wg = buildSplatGeometry(
+        weeds.centers, weeds.scales, weeds.colors,
+        weeds.winds, weeds.angles, weeds.aspects,
+      );
+      wg.boundingSphere = new THREE.Sphere(
+        new THREE.Vector3(ox + S / 2, (minY + maxY) / 2, oz + S / 2),
+        Math.hypot(S * 0.72, (maxY - minY) / 2 + 4) + 6,
+      );
+      this.weedGeo = wg;
+      const wm = new THREE.Mesh(wg, pointMat);
+      wm.frustumCulled = true;
+      this.group.add(wm);
+    }
   }
 
   dispose(scene: THREE.Scene) {
@@ -242,6 +280,8 @@ export class Chunk {
     this.rockGeo?.dispose();
     this.trunkGeo?.dispose();
     this.folGeo?.dispose();
+    this.flowerGeo?.dispose();
+    this.weedGeo?.dispose();
   }
 }
 

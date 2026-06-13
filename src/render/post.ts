@@ -30,12 +30,17 @@ export function buildPostProcessing(
   // vignette whose edges fall toward deep moss to frame the painting.
   const grade = Fn(([rgba]: [any]) => {
     let col: any = rgba.rgb;
-    col = col.mul(col.mul(0.16).add(0.88)); // mild contrast — no crushed blacks, no blown highs
+    // Midtone contrast — anchors the darks so the foreground reads deep (depth),
+    // without crushing blacks or blowing highlights.
+    col = col.mul(col.mul(0.30).add(0.80));
     const l1 = luminance(col);
+    // Restore moderate chroma: the clear foreground stays rich (fighting the wash)
+    // while the haze still desaturates the distance into atmosphere.
+    col = mix(vec3(l1, l1, l1), col, float(1.16));
     col = col.add(vec3(0.018, 0.006, -0.012).mul(l1)); // restrained warm light / cool shade
     const vg = screenUV.sub(0.5);
-    const vig = float(1.0).sub(dot(vg, vg).mul(0.6)); // 1 at centre → darker at edges
-    col = mix(col.mul(vec3(0.74, 0.86, 0.80)), col, vig); // edges deepen toward cool moss
+    const vig = float(1.0).sub(dot(vg, vg).mul(0.64)); // 1 at centre → darker at edges
+    col = mix(col.mul(vec3(0.72, 0.84, 0.78)), col, vig); // edges deepen toward cool moss
     return vec4(col, 1.0);
   });
 
