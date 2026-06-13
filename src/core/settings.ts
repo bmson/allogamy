@@ -25,7 +25,7 @@ export const uVignette = uniform(0.84); // corner darkening amount
 export const uBleed = uniform(0.7); // oil-paint smear strength
 
 // Splat / stroke shaping (SplatMaterial.ts).
-export const uStrokeBias = uniform(1.21); // length-axis elongation bias (aAspect.add)
+export const uStrokeBias = uniform(0.35); // length-axis elongation bias (aAspect.add)
 export const uSizeFloor = uniform(0.013); // distance size-floor coefficient (depth.mul)
 export const uWind = uniform(WIND_STRENGTH); // wind sway strength (config)
 export const uSizeJitter = uniform(1.0); // per-stamp size irregularity (1 ± fraction)
