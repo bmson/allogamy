@@ -28,9 +28,10 @@ async function main() {
   // Update order: fly → stream world → drift sky → reveal when ready.
   engine.add(flight);
   engine.add(bird); // ticks right after flight so it reads current position/angles
-  engine.add(adapt(() => {
+  engine.add(adapt((_dt, t) => {
     world.update(flight.position);
     world.tickGeneration(3);
+    world.tickFauna(t);
   }));
   engine.add(sky);
   engine.add(adapt(() => {
@@ -45,7 +46,7 @@ async function main() {
 }
 
 /** Wrap a thunk as an Updatable. */
-function adapt(fn: () => void): Updatable {
+function adapt(fn: (dt: number, t: number) => void): Updatable {
   return { update: fn };
 }
 

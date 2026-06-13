@@ -33,8 +33,6 @@ export interface TreeProto {
 }
 
 // ---- scratch ----
-const _a = new THREE.Vector3();
-const _b = new THREE.Vector3();
 const _dir = new THREE.Vector3();
 const _t1 = new THREE.Vector3();
 const _t2 = new THREE.Vector3();
@@ -43,9 +41,18 @@ const _col = new THREE.Color();
 const X = new THREE.Vector3(1, 0, 0);
 const Y = new THREE.Vector3(0, 1, 0);
 
-function barkColor(rnd: () => number): THREE.Color {
-  return _col.copy(palette.bark).lerp(palette.barkDark, rnd() * 0.6)
-    .offsetHSL((rnd() - 0.5) * 0.02, (rnd() - 0.5) * 0.06, (rnd() - 0.5) * 0.08).clone();
+// Extra bark tones for gnarlier, less uniform trunks — a grey-lichen cast and a
+// warmer russet so not every trunk is the same chocolate brown.
+const BARK_GREY = new THREE.Color('#6e6a5a');
+const BARK_RUST = new THREE.Color('#7a5230');
+
+function barkColor(rnd: () => number, tone = 0): THREE.Color {
+  // `tone` (a per-tree personality, 0..1) biases the whole trunk toward grey
+  // lichen or warm russet so trees don't all share one bark.
+  _col.copy(palette.bark).lerp(palette.barkDark, rnd() * 0.6);
+  if (tone < 0.33) _col.lerp(BARK_GREY, 0.18 + rnd() * 0.22);
+  else if (tone > 0.66) _col.lerp(BARK_RUST, 0.15 + rnd() * 0.2);
+  return _col.offsetHSL((rnd() - 0.5) * 0.03, (rnd() - 0.5) * 0.08, (rnd() - 0.5) * 0.1).clone();
 }
 
 const clamp = THREE.MathUtils.clamp;
@@ -55,23 +62,29 @@ const clamp = THREE.MathUtils.clamp;
 // drives hue AND lightness, so sunlit leaves warm toward lime and shaded leaves
 // deepen toward saturated blue-green. Nothing here multiplies by a separate
 // shade term (the light is baked in), so no near-black dabs stick out.
-function foliageColor(rnd: () => number, type: TreeType, lit: number): THREE.Color {
+//
+// `warmth` is a per-tree personality term (−1 cool blue-green .. +1 warm
+// golden-green): it shifts the whole canopy's hue/saturation so a wood reads as
+// MANY distinct trees — some deep emerald, some sun-yellowed, the odd one turning
+// — instead of one flat green. It's set once per prototype, not per dab.
+function foliageColor(rnd: () => number, type: TreeType, lit: number, warmth = 0): THREE.Color {
   let h: number, s: number, l: number;
   if (type === 'conifer') {
     // deep spruce blue-green; stays cool and saturated, lit tips lift a little
-    h = 0.345 - lit * 0.05 + (rnd() - 0.5) * 0.02;
-    s = 0.5 + (1 - lit) * 0.12 + rnd() * 0.06;
-    l = 0.14 + lit * 0.36 + (rnd() - 0.5) * 0.05;
+    h = 0.345 - lit * 0.05 - warmth * 0.018 + (rnd() - 0.5) * 0.025;
+    s = 0.5 + (1 - lit) * 0.12 + rnd() * 0.07;
+    l = 0.13 + lit * 0.37 + (rnd() - 0.5) * 0.06;
   } else if (type === 'bush') {
     // warmer, brighter yellow-greens for low foliage catching light
-    h = 0.30 - lit * 0.08 + (rnd() - 0.5) * 0.03;
-    s = 0.55 + (1 - lit) * 0.1 + rnd() * 0.06;
-    l = 0.18 + lit * 0.40 + (rnd() - 0.5) * 0.06;
+    h = 0.30 - lit * 0.08 - warmth * 0.03 + (rnd() - 0.5) * 0.035;
+    s = 0.55 + (1 - lit) * 0.1 + rnd() * 0.07;
+    l = 0.18 + lit * 0.40 + (rnd() - 0.5) * 0.07;
   } else {
-    // broadleaf: shade deep green → sunlit lime
-    h = 0.32 - lit * 0.10 + (rnd() - 0.5) * 0.025;
-    s = 0.56 + (1 - lit) * 0.12 + rnd() * 0.05;
-    l = 0.16 + lit * 0.44 + (rnd() - 0.5) * 0.07;
+    // broadleaf: shade deep green → sunlit lime, swung by per-tree warmth so the
+    // canopy spans emerald (cool) through chartreuse to the odd golden turning tree
+    h = 0.33 - lit * 0.10 - warmth * 0.05 + (rnd() - 0.5) * 0.03;
+    s = 0.54 + (1 - lit) * 0.13 + warmth * 0.06 + rnd() * 0.06;
+    l = 0.14 + lit * 0.46 + warmth * 0.03 + (rnd() - 0.5) * 0.08;
   }
   return _col.setHSL(clamp(h, 0, 1), clamp(s, 0, 1), clamp(l, 0.04, 0.95)).clone();
 }
@@ -132,125 +145,284 @@ function perturb(out: THREE.Vector3, dir: THREE.Vector3, angle: number, upBias: 
   return out.normalize();
 }
 
+interface BlobOpts {
+  warmth?: number; // per-tree colour personality, passed to foliageColor
+  squash?: number; // vertical squash of the cluster (1 = round, <1 = flatter)
+  droop?: number; // leaves sag downward at the rim (weeping/old crowns)
+  litBias?: number; // shift overall canopy light (deep shade interiors go negative)
+  scaleVar?: number; // extra randomness in dab size for a rougher silhouette
+}
+
 function emitBlob(
   fp: number[], fs: number[], fc: number[], fw: number[], fa: number[], fasp: number[],
   cx: number, cy: number, cz: number, radius: number, count: number,
   baseScale: number, windBase: number, type: TreeType, rnd: () => number,
+  opts: BlobOpts = {},
 ) {
+  const warmth = opts.warmth ?? 0;
+  const squash = opts.squash ?? 0.85;
+  const droop = opts.droop ?? 0;
+  const litBias = opts.litBias ?? 0;
+  const scaleVar = opts.scaleVar ?? 0.7;
   const inv = 1 / (radius + 1e-3);
   for (let i = 0; i < count; i++) {
-    // random point in a slightly squashed sphere, clustered toward centre
+    // random point in a squashed sphere; bias toward the shell (more mass on the
+    // lit outer crown, hollower interior → reads as real foliage, not a fog ball)
     const u = rnd() * 2 - 1;
     const phi = rnd() * Math.PI * 2;
-    const r = radius * Math.cbrt(rnd());
+    const r = radius * (0.45 + 0.55 * Math.cbrt(rnd()));
     const s = Math.sqrt(1 - u * u);
-    const ox = Math.cos(phi) * s * r;
-    const oy = u * r * 0.85;
-    const oz = Math.sin(phi) * s * r;
+    let ox = Math.cos(phi) * s * r;
+    let oy = u * r * squash;
+    let oz = Math.sin(phi) * s * r;
+    // organic lumps: pull a few percent of dabs outward along their azimuth so
+    // the silhouette bulges and dents instead of being a perfect ball
+    if (rnd() < 0.22) {
+      const bulge = 1 + rnd() * 0.5;
+      ox *= bulge; oz *= bulge;
+    }
+    // rim droop: outer leaves sag, strongest on the lower hemisphere
+    if (droop > 0) {
+      const rimAo = Math.sqrt(ox * ox + oz * oz) * inv;
+      oy -= droop * radius * rimAo * rimAo * (oy < 0 ? 1.4 : 0.5);
+    }
     fp.push(cx + ox, cy + oy, cz + oz);
-    fs.push(baseScale * (0.75 + rnd() * 0.7));
+    fs.push(baseScale * (0.7 + rnd() * scaleVar));
     // round leaf-clump dabs (aspect ≈ 1); orientation only jitters the silhouette
     fa.push(rnd() * Math.PI);
-    fasp.push(0.92 + rnd() * 0.18);
+    fasp.push(0.88 + rnd() * 0.26);
     // Baked canopy light → drives the colour: top-lit, sun-facing brightened,
     // rim catching light, interior in shade. No separate shade multiply.
     const topness = oy * inv * 0.5 + 0.5;
     const aoR = Math.sqrt(ox * ox + oy * oy + oz * oz) * inv;
     const sun = (ox * -0.5 + oz * -0.62) * inv;
-    const lit = clamp(0.34 + 0.4 * topness + 0.16 * aoR + 0.12 * sun, 0, 1);
-    const c = foliageColor(rnd, type, lit);
+    const lit = clamp(0.32 + litBias + 0.42 * topness + 0.18 * aoR + 0.12 * sun, 0, 1);
+    const c = foliageColor(rnd, type, lit, warmth);
     fc.push(c.r, c.g, c.b);
     // outer/upper leaves sway most
     fw.push(windBase * (0.5 + 0.5 * topness) * (0.7 + 0.5 * aoR));
   }
 }
 
+// Per-tree shape personality, set once per prototype and threaded through the
+// recursion so a whole tree shares a coherent character (warmth, gnarliness,
+// droop, how deep it branches) rather than every branch being independent.
+interface TreeChar {
+  warmth: number; // colour temperature, −1 cool .. +1 warm
+  tone: number; // bark tone bias 0..1
+  gnarl: number; // 0 straight .. 1 very crooked branches
+  droop: number; // canopy rim sag
+  maxDepth: number; // recursion depth (3 tidy .. 5 sprawling)
+}
+
 function growBranch(
   tp: number[], tn: number[], tc: number[],
   fp: number[], fs: number[], fc: number[], fw: number[], fa: number[], fasp: number[],
   a: THREE.Vector3, dir: THREE.Vector3, len: number, rad: number, depth: number,
-  rnd: () => number,
+  ch: TreeChar, rnd: () => number,
 ) {
-  const b = new THREE.Vector3().copy(a).addScaledVector(dir, len);
-  emitCylinder(tp, tn, tc, a, b, rad, rad * 0.72, barkColor(rnd), 6);
+  // Grow the limb as 2 short curving sub-segments so boughs bend & wander
+  // (gnarlier trees curve more) instead of being dead-straight sticks.
+  const segs = 2;
+  let p = a.clone();
+  const d = dir.clone();
+  for (let s = 0; s < segs; s++) {
+    const segLen = len / segs;
+    const t = (s + 1) / segs;
+    const next = p.clone().addScaledVector(d, segLen);
+    emitCylinder(tp, tn, tc, p, next, rad * (1 - 0.14 * (s / segs)), rad * (1 - 0.14 * t) * 0.86, barkColor(rnd, ch.tone), 6);
+    p = next;
+    // bend the heading a touch — gravity pull + crooked wander
+    perturb(d, d, ch.gnarl * (0.12 + rnd() * 0.28), -0.04 + rnd() * 0.06, rnd);
+  }
+  const b = p;
 
-  if (depth >= 3 || rad < 0.1) {
-    emitBlob(fp, fs, fc, fw, fa, fasp, b.x, b.y, b.z, 1.9 + rad * 3, 18 + Math.floor(rnd() * 14), 2.1, 0.8, 'deciduous', rnd);
+  if (depth >= ch.maxDepth || rad < 0.085) {
+    // a tip leaf-cluster; weeping/old trees let it droop, warmth carries through
+    emitBlob(
+      fp, fs, fc, fw, fa, fasp, b.x, b.y, b.z, 1.7 + rad * 3.2,
+      16 + Math.floor(rnd() * 16), 2.0, 0.85, 'deciduous', rnd,
+      { warmth: ch.warmth, droop: ch.droop, squash: 0.82, litBias: -0.04 },
+    );
     return;
   }
-  const n = 2 + (rnd() < 0.55 ? 1 : 0);
+  // irregular splitting: usually fork, often a single wandering extension,
+  // rarely a wide three-way — keeps the crown from looking dichotomous/tidy while
+  // holding the exponential tip count in check.
+  const roll = rnd();
+  const n = roll < 0.32 ? 1 : roll < 0.9 ? 2 : 3;
   const nd = new THREE.Vector3();
   for (let i = 0; i < n; i++) {
-    perturb(nd, dir, 0.5 + rnd() * 0.5, 0.18, rnd);
-    growBranch(tp, tn, tc, fp, fs, fc, fw, fa, fasp, b, nd.clone(), len * (0.72 + rnd() * 0.12), rad * 0.68, depth + 1, rnd);
+    // wider, more varied splay on gnarlier trees
+    perturb(nd, d, 0.4 + rnd() * (0.5 + ch.gnarl * 0.4), 0.14 + rnd() * 0.1, rnd);
+    growBranch(
+      tp, tn, tc, fp, fs, fc, fw, fa, fasp, b, nd.clone(),
+      len * (0.66 + rnd() * 0.18), rad * (0.6 + rnd() * 0.12), depth + 1, ch, rnd,
+    );
   }
 }
+
+// Deciduous archetypes — four distinct silhouettes so a wood is a mix of forms,
+// not one shape rescaled: a broad spreading oak, a tall slim birch-ish tree, a
+// low gnarled old-timer, and a weeping/drooping crown.
+type Decid = 'spread' | 'tall' | 'gnarled' | 'weeping';
 
 function buildDeciduous(rnd: () => number): TreeProto {
   const tp: number[] = [], tn: number[] = [], tc: number[] = [];
   const fp: number[] = [], fs: number[] = [], fc: number[] = [], fw: number[] = [], fa: number[] = [], fasp: number[] = [];
 
-  const trunkH = 8 + rnd() * 6;
-  const trunkR = 0.4 + rnd() * 0.32;
-  // slightly leaning trunk in two segments
-  const lean = perturb(new THREE.Vector3(), Y, rnd() * 0.16, 0, rnd);
-  const mid = new THREE.Vector3().copy(lean).multiplyScalar(trunkH * 0.55);
-  emitCylinder(tp, tn, tc, new THREE.Vector3(0, 0, 0), mid, trunkR, trunkR * 0.82, barkColor(rnd), 7);
-  const top = new THREE.Vector3().copy(lean).multiplyScalar(trunkH);
-  emitCylinder(tp, tn, tc, mid, top, trunkR * 0.82, trunkR * 0.62, barkColor(rnd), 7);
+  const kindRoll = rnd();
+  const kind: Decid = kindRoll < 0.4 ? 'spread' : kindRoll < 0.68 ? 'tall' : kindRoll < 0.86 ? 'gnarled' : 'weeping';
 
-  // boughs spreading from the top
-  const boughs = 3 + Math.floor(rnd() * 3);
-  const nd = new THREE.Vector3();
-  for (let i = 0; i < boughs; i++) {
-    perturb(nd, lean, 0.5 + rnd() * 0.55, 0.12, rnd);
-    growBranch(tp, tn, tc, fp, fs, fc, fw, fa, fasp, top, nd.clone(), trunkH * (0.4 + rnd() * 0.2), trunkR * 0.6, 1, rnd);
+  // per-tree personality
+  const ch: TreeChar = {
+    warmth: (rnd() - 0.45) * 1.4, // mostly cool-to-neutral, a few warm/turning
+    tone: rnd(),
+    gnarl: kind === 'gnarled' ? 0.7 + rnd() * 0.3 : kind === 'weeping' ? 0.45 + rnd() * 0.3 : 0.2 + rnd() * 0.35,
+    droop: kind === 'weeping' ? 0.4 + rnd() * 0.25 : kind === 'gnarled' ? 0.12 + rnd() * 0.12 : rnd() * 0.08,
+    // depth 3..4 — branch tips fan out exponentially, so this is the main lever
+    // on per-tree cost; the wild look comes from the lobed canopy + warmth, not
+    // from a deeper, heavier branch tree.
+    maxDepth: kind === 'tall' ? 3 : kind === 'gnarled' ? 4 : 3 + (rnd() < 0.45 ? 1 : 0),
+  };
+
+  let trunkH: number, trunkR: number, leanAmt: number;
+  if (kind === 'tall') { trunkH = 12 + rnd() * 7; trunkR = 0.34 + rnd() * 0.22; leanAmt = rnd() * 0.1; }
+  else if (kind === 'gnarled') { trunkH = 6 + rnd() * 3.5; trunkR = 0.55 + rnd() * 0.4; leanAmt = 0.14 + rnd() * 0.22; }
+  else if (kind === 'spread') { trunkH = 7 + rnd() * 4; trunkR = 0.46 + rnd() * 0.34; leanAmt = rnd() * 0.16; }
+  else { trunkH = 8 + rnd() * 4; trunkR = 0.4 + rnd() * 0.26; leanAmt = rnd() * 0.14; }
+
+  // a curved trunk in 3 segments — bends as it rises so even the bole wanders
+  const tsegs = 3;
+  const heading = perturb(new THREE.Vector3(), Y, leanAmt, 0, rnd);
+  let prev = new THREE.Vector3(0, 0, 0);
+  const top = prev.clone();
+  for (let s = 0; s < tsegs; s++) {
+    const segLen = trunkH / tsegs;
+    const next = prev.clone().addScaledVector(heading, segLen);
+    const r0 = trunkR * (1 - 0.22 * (s / tsegs));
+    const r1 = trunkR * (1 - 0.22 * ((s + 1) / tsegs));
+    emitCylinder(tp, tn, tc, prev, next, r0, r1, barkColor(rnd, ch.tone), 8);
+    prev = next;
+    top.copy(next);
+    // lean grows / wanders up the trunk (gnarled trees curve most)
+    perturb(heading, heading, ch.gnarl * (0.06 + rnd() * 0.12), 0.02, rnd);
   }
 
-  // a full rounded canopy mass centred above the crown
-  const canopyR = trunkH * (0.52 + rnd() * 0.2);
-  emitBlob(fp, fs, fc, fw, fa, fasp, top.x, top.y + canopyR * 0.45, top.z, canopyR, 300 + Math.floor(rnd() * 180), 2.8, 0.9, 'deciduous', rnd);
+  // boughs spreading from the crown — count & splay vary by archetype
+  const boughs =
+    kind === 'spread' ? 4 + Math.floor(rnd() * 3) :
+    kind === 'gnarled' ? 3 + Math.floor(rnd() * 3) :
+    kind === 'tall' ? 2 + Math.floor(rnd() * 2) : 3 + Math.floor(rnd() * 3);
+  const splay = kind === 'spread' ? 0.85 : kind === 'gnarled' ? 1.0 : 0.5;
+  const nd = new THREE.Vector3();
+  for (let i = 0; i < boughs; i++) {
+    perturb(nd, heading, splay * (0.5 + rnd() * 0.6), kind === 'tall' ? 0.22 : 0.1, rnd);
+    growBranch(
+      tp, tn, tc, fp, fs, fc, fw, fa, fasp, top, nd.clone(),
+      trunkH * (0.34 + rnd() * 0.24), trunkR * (0.5 + rnd() * 0.16), 1, ch, rnd,
+    );
+  }
 
-  return finalize('deciduous', tp, tn, tc, fp, fs, fc, fw, fa, fasp, trunkH + canopyR, canopyR);
+  // Asymmetric canopy: a cluster of overlapping blobs of different size, with a
+  // dim deeply-shaded core and brighter lobes around it, the whole thing pushed
+  // off-centre so no two trees crown the same. Tall trees keep a tighter column,
+  // spread trees a wide flattened parasol.
+  const canopyR = trunkH * (kind === 'tall' ? 0.34 + rnd() * 0.12 : kind === 'spread' ? 0.6 + rnd() * 0.22 : 0.48 + rnd() * 0.18);
+  const cTop = top.clone();
+  const cBase = canopyR * (kind === 'spread' ? 0.32 : kind === 'weeping' ? 0.5 : 0.42);
+  const lobes = 3 + Math.floor(rnd() * 3);
+  // shaded inner mass first (deep core)
+  emitBlob(
+    fp, fs, fc, fw, fa, fasp, cTop.x, cTop.y + cBase, cTop.z, canopyR * 0.78,
+    140 + Math.floor(rnd() * 80), 2.6, 0.85, 'deciduous', rnd,
+    { warmth: ch.warmth, droop: ch.droop * 0.5, squash: kind === 'spread' ? 0.7 : 0.9, litBias: -0.16, scaleVar: 0.6 },
+  );
+  // surrounding lit lobes, offset around and above
+  for (let i = 0; i < lobes; i++) {
+    const ang = (i / lobes) * Math.PI * 2 + rnd() * 1.2;
+    const off = canopyR * (0.35 + rnd() * 0.4);
+    const lr = canopyR * (0.5 + rnd() * 0.42);
+    const lx = cTop.x + Math.cos(ang) * off;
+    const lz = cTop.z + Math.sin(ang) * off;
+    const ly = cTop.y + cBase + canopyR * (0.15 + rnd() * 0.5);
+    emitBlob(
+      fp, fs, fc, fw, fa, fasp, lx, ly, lz, lr,
+      70 + Math.floor(rnd() * 70), 2.5, 0.95, 'deciduous', rnd,
+      { warmth: ch.warmth, droop: ch.droop, squash: kind === 'spread' ? 0.72 : 0.86, litBias: 0.04, scaleVar: 0.75 },
+    );
+  }
+
+  const fullH = trunkH + canopyR * 1.6;
+  return finalize('deciduous', tp, tn, tc, fp, fs, fc, fw, fa, fasp, fullH, canopyR * 1.15);
 }
 
 function buildConifer(rnd: () => number): TreeProto {
   const tp: number[] = [], tn: number[] = [], tc: number[] = [];
   const fp: number[] = [], fs: number[] = [], fc: number[] = [], fw: number[] = [], fa: number[] = [], fasp: number[] = [];
 
-  const H = 12 + rnd() * 9;
-  const R = 0.34 + rnd() * 0.26;
-  const lean = perturb(new THREE.Vector3(), Y, rnd() * 0.08, 0, rnd);
-  // trunk in three segments tapering to a point
-  let prev = new THREE.Vector3(0, 0, 0);
-  for (let s = 1; s <= 3; s++) {
-    const p = new THREE.Vector3().copy(lean).multiplyScalar((s / 3) * H);
-    emitCylinder(tp, tn, tc, prev, p, R * (1 - (s - 1) / 3) + 0.04, R * (1 - s / 3) + 0.03, barkColor(rnd), 6);
-    prev = p;
-  }
+  // per-tree personality: cool spruce vs. a slightly warmer fir; some spindly &
+  // tall, some squat & broad; the odd crooked, weather-bent old spire.
+  const warmth = (rnd() - 0.6) * 0.9; // conifers skew cool
+  const tone = rnd();
+  const slender = 0.7 + rnd() * 0.6; // <1 squat .. >1 spindly
+  const bent = rnd() < 0.35 ? 0.1 + rnd() * 0.12 : rnd() * 0.05;
 
-  // conical tiered foliage: rings shrinking toward a pointed top
-  const baseR = H * (0.26 + rnd() * 0.1);
-  const tiers = 5 + Math.floor(rnd() * 3);
+  const H = 11 + rnd() * 10;
+  const R = 0.32 + rnd() * 0.24;
+  // a slightly leaning, gently curving spire (weather-bent on some)
+  const heading = perturb(new THREE.Vector3(), Y, bent, 0, rnd);
+  let prev = new THREE.Vector3(0, 0, 0);
+  const apex = prev.clone();
+  for (let s = 1; s <= 3; s++) {
+    const next = prev.clone().addScaledVector(heading, H / 3);
+    emitCylinder(tp, tn, tc, prev, next, R * (1 - (s - 1) / 3) + 0.04, R * (1 - s / 3) + 0.03, barkColor(rnd, tone), 6);
+    prev = next;
+    apex.copy(next);
+    perturb(heading, heading, bent * (0.4 + rnd() * 0.6), 0.01, rnd);
+  }
+  // axis offset at a given height (the spire isn't vertical)
+  const axisAt = (cy: number) => {
+    const f = clamp(cy / H, 0, 1);
+    return { x: apex.x * f, z: apex.z * f };
+  };
+
+  // conical tiered foliage: rings shrinking toward a pointed top, but with the
+  // tier heights/radii jittered and a couple of lopsided gaps so the cone isn't
+  // a stamped Christmas-tree. Skirt tiers droop & overhang.
+  const baseR = H * (0.24 + rnd() * 0.12) / slender;
+  const tiers = 6 + Math.floor(rnd() * 4);
   for (let t = 0; t < tiers; t++) {
-    const f = t / (tiers - 1); // 0 base .. 1 top
-    const cy = H * (0.22 + f * 0.74);
-    const ringR = baseR * (1 - f) + 0.4;
-    const dabs = Math.round(12 + (1 - f) * 34);
+    const f = (t + (rnd() - 0.5) * 0.5) / (tiers - 1); // 0 base .. 1 top, jittered
+    const ff = clamp(f, 0, 1);
+    const cy = H * (0.16 + ff * 0.8);
+    const ringR = (baseR * Math.pow(1 - ff, 1.15) + 0.4);
+    const ax = axisAt(cy);
+    // lopsided fullness: each tier favours one side a little
+    const lop = rnd() * Math.PI * 2;
+    const lopAmt = 0.2 + rnd() * 0.35;
+    const dabs = Math.round(14 + (1 - ff) * 40);
     for (let i = 0; i < dabs; i++) {
       const ang = rnd() * Math.PI * 2;
-      const rr = ringR * (0.4 + rnd() * 0.6);
-      fp.push(Math.cos(ang) * rr + lean.x * cy, cy + (rnd() - 0.5) * ringR * 0.3, Math.sin(ang) * rr + lean.z * cy);
-      fs.push((1.25 + rnd() * 0.9) * (0.7 + (1 - f) * 0.6));
-      // baked light: lower skirts in shadow, top tiers lit, sun-facing brightened
+      const sideBias = 1 + Math.cos(ang - lop) * lopAmt;
+      const rr = ringR * (0.35 + rnd() * 0.65) * sideBias;
+      const droop = (1 - ff) * ringR * 0.18; // skirts hang
+      fp.push(
+        Math.cos(ang) * rr + ax.x,
+        cy + (rnd() - 0.5) * ringR * 0.3 - droop,
+        Math.sin(ang) * rr + ax.z,
+      );
+      fs.push((1.2 + rnd() * 1.0) * (0.7 + (1 - ff) * 0.7));
+      // baked light: lower skirts in shadow, top tiers lit, sun-facing brightened,
+      // deep interior near the trunk goes darkest (richer, layered cone)
       const aoR = rr / (ringR + 1e-3);
       const sun = Math.cos(ang) * -0.5 + Math.sin(ang) * -0.62;
-      const lit = clamp(0.28 + 0.42 * f + 0.18 * aoR + 0.12 * sun, 0, 1);
-      const c = foliageColor(rnd, 'conifer', lit);
+      const lit = clamp(0.24 + 0.44 * ff + 0.2 * aoR + 0.12 * sun, 0, 1);
+      const c = foliageColor(rnd, 'conifer', lit, warmth);
       fc.push(c.r, c.g, c.b);
-      fw.push(0.55 * (0.3 + 0.7 * f)); // conifers are stiffer; tips sway a little
-      fa.push(ang + Math.PI / 2 + (rnd() - 0.5) * 0.5); // sprays radiate from the spire
-      fasp.push(1.0 + rnd() * 0.22); // mild elongation → needle-spray feel
+      fw.push(0.5 * (0.3 + 0.7 * ff)); // conifers are stiffer; tips sway a little
+      fa.push(ang + Math.PI / 2 + (rnd() - 0.5) * 0.6); // sprays radiate from the spire
+      fasp.push(1.0 + rnd() * 0.28); // mild elongation → needle-spray feel
     }
   }
   return finalize('conifer', tp, tn, tc, fp, fs, fc, fw, fa, fasp, H, baseR);
@@ -285,16 +457,22 @@ function finalize(
  */
 function buildBush(rnd: () => number, scrub: boolean): TreeProto {
   const fp: number[] = [], fs: number[] = [], fc: number[] = [], fw: number[] = [], fa: number[] = [], fasp: number[] = [];
+  const warmth = (rnd() - 0.4) * 1.2; // bushes skew warm/bright
   const R = scrub ? 1.9 + rnd() * 2.6 : 1.2 + rnd() * 1.6;
   const cy = R * (scrub ? 0.42 : 0.7); // scrub sits lower & wider
-  // overlapping leafy mounds — scrub spreads into 2-4 clumps
-  const mounds = scrub ? 2 + Math.floor(rnd() * 3) : 1 + (rnd() < 0.5 ? 1 : 0);
+  // overlapping leafy mounds — scrub spreads into 2-5 clumps of varied size,
+  // shrubs are sometimes a single mound, sometimes a lumpy pair
+  const mounds = scrub ? 2 + Math.floor(rnd() * 4) : 1 + (rnd() < 0.55 ? 1 : 0);
   for (let m = 0; m < mounds; m++) {
-    const spread = scrub ? 1.1 : 0.7;
+    const spread = scrub ? 1.2 : 0.8;
     const mx = (rnd() - 0.5) * R * spread;
     const mz = (rnd() - 0.5) * R * spread;
-    const mr = scrub ? R * (0.55 + rnd() * 0.35) : R;
-    emitBlob(fp, fs, fc, fw, fa, fasp, mx, cy + (rnd() - 0.5) * R * 0.25, mz, mr, 45 + Math.floor(rnd() * 45), 1.4, 0.42, 'bush', rnd);
+    const mr = scrub ? R * (0.45 + rnd() * 0.45) : R * (0.8 + rnd() * 0.3);
+    emitBlob(
+      fp, fs, fc, fw, fa, fasp, mx, cy + (rnd() - 0.5) * R * 0.3, mz, mr,
+      40 + Math.floor(rnd() * 45), 1.4, 0.42, 'bush', rnd,
+      { warmth, squash: scrub ? 0.6 : 0.8, droop: scrub ? 0.18 : rnd() * 0.1, litBias: -0.04, scaleVar: 0.8 },
+    );
   }
   // blossoms + berries scattered over the crown (scrub gets far fewer)
   const decor = scrub ? 3 + Math.floor(rnd() * 6) : 14 + Math.floor(rnd() * 18);
@@ -323,19 +501,20 @@ function buildBush(rnd: () => number, scrub: boolean): TreeProto {
   return finalize('bush', [], [], [], fp, fs, fc, fw, fa, fasp, R * 1.6, R);
 }
 
-/** Build the tree prototype library once. */
+/** Build the tree prototype library once. A bigger, more varied library means a
+ * wood reads as many individuals — far less obvious repetition than before. */
 export function createTreePrototypes(seed: number): TreeProto[] {
   const protos: TreeProto[] = [];
-  for (let i = 0; i < 7; i++) protos.push(buildDeciduous(mulberry32((seed * 131 + i * 17 + 1) >>> 0)));
-  for (let i = 0; i < 5; i++) protos.push(buildConifer(mulberry32((seed * 197 + i * 23 + 7) >>> 0)));
+  for (let i = 0; i < 11; i++) protos.push(buildDeciduous(mulberry32((seed * 131 + i * 17 + 1) >>> 0)));
+  for (let i = 0; i < 7; i++) protos.push(buildConifer(mulberry32((seed * 197 + i * 23 + 7) >>> 0)));
   return protos;
 }
 
 /** Build the bush prototype library once — a mix of flowering shrubs and scrub. */
 export function createBushPrototypes(seed: number): TreeProto[] {
   const protos: TreeProto[] = [];
-  for (let i = 0; i < 7; i++) protos.push(buildBush(mulberry32((seed * 251 + i * 29 + 3) >>> 0), false));
-  for (let i = 0; i < 7; i++) protos.push(buildBush(mulberry32((seed * 311 + i * 37 + 9) >>> 0), true));
+  for (let i = 0; i < 9; i++) protos.push(buildBush(mulberry32((seed * 251 + i * 29 + 3) >>> 0), false));
+  for (let i = 0; i < 9; i++) protos.push(buildBush(mulberry32((seed * 311 + i * 37 + 9) >>> 0), true));
   return protos;
 }
 
@@ -412,11 +591,17 @@ export function scatterTrees(
       if (rnd() > 0.42 * (0.35 + dens)) continue;
 
       const proto = treeProtos[Math.floor(rnd() * treeProtos.length)];
-      const scale = 0.95 + rnd() * 0.8;
+      // Long-tailed size: most trees mid-sized, many smaller, but the odd
+      // towering elder and the occasional sapling — a wild, uneven canopy line
+      // instead of one uniform height band.
+      const sr = rnd();
+      const scale = sr < 0.12 ? 0.55 + rnd() * 0.3        // saplings / undergrowth
+        : sr > 0.92 ? 1.7 + rnd() * 1.0                    // rare giants
+        : 0.85 + rnd() * 0.85;                             // the common range
       const yaw = rnd() * Math.PI * 2;
       const cy = Math.cos(yaw), sy = Math.sin(yaw);
       const y = field.height(x, z) - 0.3;
-      const tint = 0.92 + rnd() * 0.16;
+      const tint = 0.88 + rnd() * 0.22;
 
       const tpos = proto.trunkPos, tnor = proto.trunkNor, tcol = proto.trunkCol;
       for (let k = 0; k < tpos.length; k += 3) {

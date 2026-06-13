@@ -2,7 +2,7 @@ import * as THREE from 'three/webgpu';
 import {
   attribute, uv, vec2, vec3, vec4, float, smoothstep, mix, modelViewMatrix,
   cameraProjectionMatrix, positionGeometry, time, sin, cos, fract, mod,
-  uniform, max, clamp, abs,
+  uniform, max, clamp, abs, pow, oneMinus,
 } from 'three/tsl';
 import { palette } from './palette';
 import { mulberry32 } from '../core/rng';
@@ -30,10 +30,17 @@ const BOX = BOX_HALF * 2;
 
 // Bounded population. Kept deliberately sparse — this should feel like the air
 // is gently alive, not a blizzard.
-const N_PETALS = 220; // flower petals (mild elongation, warm flora colours)
-const N_LEAVES = 150; // tiny tumbling leaves (greens)
-const N_POLLEN = 520; // luminous motes (small, faintly bright → catch the bloom)
+// Deliberately few — the drift should add to the calm of the landscape, a
+// barely-there weather of airborne life, never a snowstorm of confetti.
+const N_PETALS = 170; // flower petals (mild elongation, warm flora colours)
+const N_LEAVES = 130; // tumbling/spinning leaves (greens + a few autumn warms)
+const N_POLLEN = 460; // luminous motes (small, faintly bright → catch the bloom)
 const N_BUTTERFLIES = 7; // a handful, larger & brighter, wing-flap
+
+// A couple of warm autumnal leaf tones (local — palette.ts is read-only). Rare,
+// just enough to break the green into something painted rather than uniform.
+const LEAF_AMBER = new THREE.Color('#d98a2b'); // sun-dried amber
+const LEAF_RUST = new THREE.Color('#b8521f'); // turning rust
 
 export interface DriftOptions {
   /** Override the per-stream counts (e.g. to thin out on weak GPUs). */
@@ -100,30 +107,62 @@ function makeMotesMaterial(u: DriftUniforms): THREE.MeshBasicNodeMaterial {
   const aKind = attribute('aKind', 'float'); // KIND_*
   const aAspect = attribute('aAspect', 'float'); // 1 = round; >1 = petal/leaf length
 
-  const ph = aSeed.mul(6.2831); // per-instance phase
-  const seedB = fract(aSeed.mul(91.7)).mul(6.2831);
+  // Per-instance phases — several decorrelated seeds so no two motes share a
+  // gait. (fract of a big multiple is a cheap independent random in the shader.)
+  const ph = aSeed.mul(6.2831); // primary phase
+  const seedB = fract(aSeed.mul(91.7)).mul(6.2831); // secondary phase
+  const seedC = fract(aSeed.mul(57.3)).mul(6.2831); // tertiary phase
+  const hand = fract(aSeed.mul(311.7)).sub(0.5).sign(); // +1/-1 tumble handedness
 
-  // ── motion (all in the vertex shader) ──────────────────────────────────
-  // Gentle fall + lateral drift + a slow spiral, each instance on its own phase
-  // and speed so nothing reads as a grid. Speeds are slow → unhurried.
-  const fallSpeed = float(1.1).add(fract(aSeed.mul(13.1)).mul(0.9)); // m/s, varied
-  const driftAmp = float(2.2).add(fract(aSeed.mul(7.3)).mul(2.0));
-  const spiralR = float(0.9).add(fract(aSeed.mul(5.1)).mul(1.3));
+  // Kind selectors (0/1 floats for branch-free mixing).
+  const isPollen = float(aKind.equal(float(KIND_POLLEN)));
+  const isLeaf = float(aKind.equal(float(KIND_LEAF)));
+  const isPetal = float(aKind.equal(float(KIND_PETAL)));
 
   const tt = time;
-  // descend (wrap handles the recycle); pollen drifts almost weightless
-  const isPollen = aKind.equal(float(KIND_POLLEN));
-  const fall = mix(fallSpeed, fallSpeed.mul(0.35), float(isPollen)); // pollen hangs
-  const dy = tt.mul(fall).negate();
 
-  // lateral wander: two slow sines on independent phases → a soft figure path
-  const dx = sin(tt.mul(0.31).add(ph)).mul(driftAmp)
-    .add(sin(tt.mul(0.17).add(seedB)).mul(driftAmp.mul(0.5)));
-  const dz = cos(tt.mul(0.27).add(ph)).mul(driftAmp)
-    .add(cos(tt.mul(0.13).add(seedB)).mul(driftAmp.mul(0.5)));
+  // ── shared wind field ───────────────────────────────────────────────────
+  // One slow, low-frequency breeze that EVERYTHING leans into together, so the
+  // drift reads as a single body of moving air rather than independent confetti.
+  // Two octaves: a long swell + a quicker gust riding on it, plus a faint spatial
+  // term (home.x/z) so distant motes lag the near ones — the wind has a front.
+  const windPhase = aHome.x.mul(0.018).add(aHome.z.mul(0.013));
+  const gust = sin(tt.mul(0.21).add(windPhase))
+    .add(sin(tt.mul(0.071).add(windPhase.mul(0.5))).mul(0.6))
+    .mul(0.6); // -ish [-1,1] breeze strength
+  // prevailing direction (gentle, mostly +x with a little +z) modulated by gust
+  const windX = gust.mul(3.0).add(0.6);
+  const windZ = sin(tt.mul(0.053).add(windPhase.mul(0.7))).mul(1.6);
 
-  // slow spiral (gives each mote a quiet orbit on top of the wander)
-  const spin = tt.mul(0.6).add(ph);
+  // ── per-kind fall + buoyancy ─────────────────────────────────────────────
+  // Petals sink lazily, leaves a touch faster (heavier, more positive tumble),
+  // pollen is near-weightless and even rises a little on the breath of the gust.
+  const fallBase = float(0.85).add(fract(aSeed.mul(13.1)).mul(0.7)); // m/s, varied
+  const fall = fallBase
+    .mul(mix(float(1.0), float(1.25), isLeaf)) // leaves fall a little faster
+    .mul(mix(float(1.0), float(0.18), isPollen)); // pollen barely descends
+  // leaves & petals "flutter-fall": vertical speed pulses as they pitch, so they
+  // hang and dive instead of sinking at a constant rate (the classic leaf gait).
+  const flutterFall = sin(tt.mul(1.6).add(ph)).mul(0.55).mul(oneMinus(isPollen));
+  const buoy = isPollen.mul(sin(tt.mul(0.2).add(seedB)).mul(0.4)); // pollen rides air
+  const dy = tt.mul(fall).negate().add(flutterFall.div(1.6)).add(buoy);
+
+  // ── lateral wander: gust + two decorrelated swirls ────────────────────────
+  // The breeze carries everyone; on top, each mote traces its own slow loop so
+  // the field shimmers with independent life inside the shared current.
+  const driftAmp = float(1.6).add(fract(aSeed.mul(7.3)).mul(1.8));
+  const dx = windX
+    .add(sin(tt.mul(0.33).add(ph)).mul(driftAmp))
+    .add(sin(tt.mul(0.19).add(seedB)).mul(driftAmp.mul(0.5)));
+  const dz = windZ
+    .add(cos(tt.mul(0.29).add(ph)).mul(driftAmp))
+    .add(cos(tt.mul(0.15).add(seedC)).mul(driftAmp.mul(0.5)));
+
+  // ── helical drift: a quiet orbit on top, tighter & faster for leaves which
+  // corkscrew as they spin, looser for lazy petals. ─────────────────────────
+  const spiralR = float(0.6).add(fract(aSeed.mul(5.1)).mul(0.9))
+    .mul(mix(float(1.0), float(1.5), isLeaf));
+  const spin = tt.mul(mix(float(0.5), float(0.95), isLeaf)).mul(hand).add(ph);
   const sx = cos(spin).mul(spiralR);
   const sz = sin(spin).mul(spiralR);
 
@@ -143,7 +182,7 @@ function makeMotesMaterial(u: DriftUniforms): THREE.MeshBasicNodeMaterial {
   const toI = homeWorld.sub(u.uBurst.xyz);
   const dist = toI.length().add(0.001);
   const within = smoothstep(float(14.0), float(2.0), dist); // near the puff only
-  const pushAmt = burstFade.mul(within).mul(mix(float(2.0), float(7.0), float(isPollen)));
+  const pushAmt = burstFade.mul(within).mul(mix(float(2.0), float(7.0), isPollen));
   const push = toI.div(dist).mul(pushAmt);
   // lift the puff slightly (pollen rises on a breath)
   animated = animated.add(vec3(push.x, push.y.add(pushAmt.mul(0.4)), push.z));
@@ -151,14 +190,32 @@ function makeMotesMaterial(u: DriftUniforms): THREE.MeshBasicNodeMaterial {
   // wrap the animated position into the camera-centred box
   const worldPos = wrapToCamera(animated, u.uCamPos);
 
-  // ── flutter / spin of the stamp itself ─────────────────────────────────
-  // petals & leaves tumble (oscillating screen-rotation + a width "flip" so they
-  // read as flat things turning edge-on); pollen barely rotates.
-  const flutter = sin(tt.mul(2.3).add(ph)).mul(0.9).add(tt.mul(0.7));
-  const angle = mix(flutter, flutter.mul(0.15), float(isPollen));
-  // edge-on flip: aspect width breathes with the tumble (flat-paper feel)
-  const flip = abs(sin(tt.mul(1.7).add(seedB))).mul(0.7).add(0.3);
-  const widthScale = mix(flip, float(1.0), float(isPollen));
+  // ── flutter / tumble of the stamp itself ───────────────────────────────
+  // A flat thing turning in the air reads from two motions on the billboard:
+  //   • spin  — the dab rotates in the screen plane (its silhouette turns).
+  //   • pitch — its projected WIDTH breathes through zero as it goes edge-on,
+  //             so it appears to flip face↔edge like real paper.
+  // Leaves do this hard and fast (end-over-end tumble); petals only sway and
+  // flutter lazily; pollen is a near-still round speck.
+  //
+  // continuous screen-spin: leaves whirl, petals merely rock back and forth.
+  const leafSpin = tt.mul(2.1).mul(hand).add(ph) // leaves keep turning
+    .add(sin(tt.mul(3.3).add(seedB)).mul(0.4)); // with a jittery wobble
+  const petalSway = sin(tt.mul(1.3).add(ph)).mul(0.7) // petals just sway
+    .add(sin(tt.mul(0.5).add(seedC)).mul(0.4));
+  const angle = mix(petalSway, leafSpin, isLeaf).mul(oneMinus(isPollen));
+
+  // pitch flip: the width factor swings through ~0 so the dab goes edge-on.
+  // signed cosine for petals/leaves so they momentarily vanish at the edge
+  // (a flat plane seen edge-on has no area) — leaves flip fastest.
+  const pitchRate = mix(float(1.4), float(2.6), isLeaf);
+  const pitch = cos(tt.mul(pitchRate).add(seedB));
+  // keep a sliver of width at the edge (0.12) so it never fully disappears and
+  // the alpha-test cutout doesn't strobe; pollen stays perfectly round (1.0).
+  const flatWidth = abs(pitch).mul(0.88).add(0.12);
+  const widthScale = mix(flatWidth, float(1.0), isPollen);
+  // face-on factor → drives a brightness catch-the-light below (face glints).
+  const faceOn = abs(pitch);
 
   // ── billboard (camera-facing quad), matching SplatMaterial's construction ─
   const centerView = modelViewMatrix.mul(vec4(worldPos, 1.0));
@@ -170,27 +227,43 @@ function makeMotesMaterial(u: DriftUniforms): THREE.MeshBasicNodeMaterial {
   const viewPos = vec4(centerView.xyz.add(vec3(corner, 0.0)), 1.0);
   mat.vertexNode = cameraProjectionMatrix.mul(viewPos);
 
-  // ── soft analytic dab (round, feathered) — same look as the terrain splats ─
+  // ── soft analytic dab — a painterly brush-stamp, shaped per kind ──────────
+  // Pollen: a round feathered speck. Petal: a soft teardrop, fuller at the base.
+  // Leaf: a pointed ovoid (tapered to a tip), so its silhouette reads as a leaf
+  // even at a glance. All built from the same -1..1 uv, branch-free via mixes.
   const p = uv().sub(vec2(0.5, 0.5)).mul(2.0); // -1..1
-  const rad = p.length();
-  const wob = float(0.86)
-    .add(sin(p.x.mul(8.0).add(ph)).mul(0.05))
-    .add(sin(p.y.mul(6.0).sub(seedB)).mul(0.05));
-  const edge = smoothstep(wob.sub(0.3), wob, rad);
+  // brush wobble — a little hand-painted irregularity on the rim
+  const wob = float(0.84)
+    .add(sin(p.x.mul(7.0).add(ph)).mul(0.05))
+    .add(sin(p.y.mul(5.0).sub(seedB)).mul(0.05));
+  // tip taper for petal/leaf: narrow the dab toward the +y end (the "tip"), more
+  // for leaves than petals; pollen keeps full width (taper = 0).
+  const along = p.y.mul(0.5).add(0.5); // 0 at base .. 1 at tip
+  const taperAmt = mix(mix(float(0.0), float(0.35), isPetal), float(0.7), isLeaf);
+  const widthAtY = oneMinus(along.mul(taperAmt));
+  const px = abs(p.x).div(max(widthAtY, float(0.05)));
+  const rad = vec2(px, p.y).length();
+  const edge = smoothstep(wob.sub(0.34), wob, rad);
+  // leaf midrib: a faint darker crease down the centre line (painted, not lit).
+  const midrib = oneMinus(smoothstep(float(0.0), float(0.16), abs(p.x))).mul(isLeaf).mul(0.18);
 
   // ── baked colour + a fade as motes approach the camera so none "pop" in the
   // lens, plus the same aerial-perspective wash the splats use at distance. ──
-  const dab = float(1.0).sub(edge.mul(0.18));
+  // catch-the-light: when a flat dab swings face-on (faceOn → 1) it briefly
+  // glints; edge-on it dims. A quiet shimmer that makes the tumble feel sunlit.
+  const glint = mix(float(1.0), mix(float(0.62), float(1.18), pow(faceOn, float(1.5))),
+    oneMinus(isPollen));
+  const dab = oneMinus(edge.mul(0.18)).sub(midrib);
   const depth = centerView.z.negate();
   // soft near fade: hide the closest few metres so things appear out of the haze
   const nearFade = smoothstep(float(1.5), float(7.0), depth);
   // far wash into the air tone
   const fogF = smoothstep(float(FOG_NEAR), float(FOG_FAR), depth);
   const air = vec3(palette.air.r, palette.air.g, palette.air.b);
-  const shaded = aColor.mul(dab);
+  const shaded = aColor.mul(dab).mul(glint);
   mat.colorNode = mix(shaded, air, fogF.mul(0.5));
   // fold the near fade into opacity so close motes dissolve (alphaTest culls them)
-  mat.opacityNode = float(1.0).sub(edge).mul(nearFade);
+  mat.opacityNode = oneMinus(edge).mul(nearFade);
 
   return mat;
 }
@@ -318,17 +391,25 @@ export function createDrift(opts: DriftOptions = {}): Drift {
       else c.copy(palette.flowerYellow);
       c.offsetHSL((rnd() - 0.5) * 0.02, (rnd() - 0.5) * 0.06, (rnd() - 0.5) * 0.06);
       scales[w] = 0.5 + rnd() * 0.45;
-      aspects[w] = 1.15 + rnd() * 0.25; // mild petal elongation
+      aspects[w] = 1.2 + rnd() * 0.35; // mild petal elongation (soft teardrop)
     } else if (kind === KIND_LEAF) {
-      // tiny tumbling leaves — light-coupled greens (sunlit lime → cool green)
-      const lit = rnd();
-      const h = 0.30 - lit * 0.09 + (rnd() - 0.5) * 0.02;
-      const s = 0.55 + (1 - lit) * 0.12;
-      const l = 0.30 + lit * 0.34 + (rnd() - 0.5) * 0.06;
-      c.setHSL(THREE.MathUtils.clamp(h, 0, 1), THREE.MathUtils.clamp(s, 0, 1),
-        THREE.MathUtils.clamp(l, 0.1, 0.85));
+      // tumbling leaves — mostly light-coupled greens (sunlit lime → cool green),
+      // with a rare warm one (amber/rust) so the field reads painted, not uniform.
+      const warm = rnd();
+      if (warm < 0.12) {
+        // a few turning leaves: amber or rust, with a touch of variation
+        c.copy(warm < 0.07 ? LEAF_AMBER : LEAF_RUST);
+        c.offsetHSL((rnd() - 0.5) * 0.03, (rnd() - 0.5) * 0.08, (rnd() - 0.5) * 0.1);
+      } else {
+        const lit = rnd();
+        const h = 0.30 - lit * 0.09 + (rnd() - 0.5) * 0.02;
+        const s = 0.55 + (1 - lit) * 0.12;
+        const l = 0.30 + lit * 0.34 + (rnd() - 0.5) * 0.06;
+        c.setHSL(THREE.MathUtils.clamp(h, 0, 1), THREE.MathUtils.clamp(s, 0, 1),
+          THREE.MathUtils.clamp(l, 0.1, 0.85));
+      }
       scales[w] = 0.45 + rnd() * 0.4;
-      aspects[w] = 1.1 + rnd() * 0.3;
+      aspects[w] = 1.3 + rnd() * 0.5; // leaves longer than petals (tapered ovoid)
     } else {
       // luminous pollen mote — small & faintly bright so it just catches bloom
       c.copy(palette.flowerYellow).lerp(palette.flowerWhite, rnd() * 0.5);

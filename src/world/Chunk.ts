@@ -8,6 +8,8 @@ import { scatterTrees, TreeProto } from './tree';
 // (TreeProto covers both trees and bushes)
 import { scatterFlowers } from './flowers';
 import { scatterWeeds } from './weeds';
+import { scatterFauna, ChunkFauna } from './fauna';
+import { buildWater } from './water';
 import { CHUNK_SIZE, CHUNK_RES, SPLATS_PER_CHUNK, SPLAT_DENSITY, WORLD_SEED, SUN_DIR } from '../config';
 
 // Normalised sun direction, for baking slope shading into the splats.
@@ -32,6 +34,9 @@ export class Chunk {
   private folGeo: THREE.BufferGeometry | null = null;
   private flowerGeo: THREE.BufferGeometry | null = null;
   private weedGeo: THREE.BufferGeometry | null = null;
+  private waterGeo: THREE.BufferGeometry | null = null;
+  private shoreGeo: THREE.BufferGeometry | null = null;
+  private fauna: ChunkFauna | null = null;
 
   constructor(
     cx: number,
@@ -41,6 +46,7 @@ export class Chunk {
     pointMat: THREE.Material,
     rockMat: THREE.Material,
     trunkMat: THREE.Material,
+    waterMat: THREE.Material,
     protos: TreeProto[],
     bushProtos: TreeProto[],
   ) {
@@ -151,7 +157,15 @@ export class Chunk {
       let yoff = 0.4 + rnd() * 1.0;
 
       const grassy = path < 0.3 && rock < 0.4;
-      if (grassy) {
+      // Wild transition: the grass/path boundary is never a clean line. In the worn
+      // margin (the frayed band where some path bleeds into grass) we occasionally
+      // override one read with the other — bare grit creeps into the turf and grass
+      // tufts push onto the track — so the edge reads ragged and broken-up.
+      const margin = path > 0.08 && path < 0.34; // the frayed transition band
+      const bareInGrass = grassy && margin && rnd() < 0.35;
+      const grassOnPath = !grassy && path < 0.6 && rock < 0.4 && rnd() < 0.28;
+
+      if (grassy && !bareInGrass) {
         if (rnd() < 0.04) {
           // wildflower fleck floating just above the grass — colour punctuation
           const f = rnd();
@@ -165,20 +179,36 @@ export class Chunk {
           // into lightness here (do NOT also multiply by shade).
           const tint = field.tint(x, z) * 0.5 + 0.5;
           let h = 0.32 - lit * 0.11 + (tint - 0.5) * 0.05;
-          let s = 0.58 + (1 - lit) * 0.12 + tint * 0.05;
-          let l = 0.16 + lit * 0.42 + (rnd() - 0.5) * 0.08;
-          if (field.dry(x, z) > 0.62) { h = 0.19; s = 0.74; l = 0.5 + lit * 0.12; }
+          // Saturation pulled back — the meadow was reading too vibrant/electric; a
+          // softer, more naturalistic, slightly dusty green sits better in the haze.
+          let s = 0.44 + (1 - lit) * 0.1 + tint * 0.04;
+          let l = 0.17 + lit * 0.4 + (rnd() - 0.5) * 0.08;
+          if (field.dry(x, z) > 0.62) { h = 0.2; s = 0.56; l = 0.48 + lit * 0.12; } // calmer lime
           if (rnd() < 0.1) l *= 0.6; // deep-shadow pockets
           cc.setHSL(h, s, THREE.MathUtils.clamp(l, 0.05, 0.95));
           wind = 0.4 + rnd() * 0.15;
         }
+      } else if (grassOnPath) {
+        // a ragged grass tuft pushing out onto the worn track — frayed encroachment.
+        // A slightly drier, dustier turf so it reads as scrappy verge growth, and a
+        // taller upright blade-ish dab that catches the wind.
+        const h = 0.27 - lit * 0.09;
+        const s = 0.4 + (1 - lit) * 0.08;
+        const l = THREE.MathUtils.clamp(0.18 + lit * 0.38 + (rnd() - 0.5) * 0.08, 0.05, 0.95);
+        cc.setHSL(h, s, l);
+        scale = 0.6 + rnd() * 0.6;
+        yoff = 0.3 + rnd() * 0.6;
+        wind = 0.45 + rnd() * 0.2;
+        aspect = 1.3 + rnd() * 0.8; // upright blade
       } else {
-        // bare ground: dirt/pebble dabs (mixColor tints them), shaded by sun
+        // bare ground: dirt/pebble dabs (mixColor tints them), shaded by sun. In the
+        // grass margin (bareInGrass) this is worn earth/grit creeping INTO the turf.
         field.mixColor(x, z, y, slope, path, rock, cc);
         const shade = THREE.MathUtils.clamp(0.62 + 0.5 * ndotl, 0.5, 1.12);
         if (rnd() < 0.12) cc.copy(palette.rock).lerp(palette.rockShadow, rnd());
+        else if (bareInGrass && rnd() < 0.5) cc.copy(palette.pathPebble).lerp(palette.pathEarthDry, rnd()); // pale grit fleck
         cc.multiplyScalar(shade);
-        scale = 0.9 + rnd() * 0.8;
+        scale = bareInGrass ? 0.6 + rnd() * 0.6 : 0.9 + rnd() * 0.8;
         wind = 0;
         aspect = 0.95 + rnd() * 0.2;
       }
@@ -271,6 +301,44 @@ export class Chunk {
       wm.frustumCulled = true;
       this.group.add(wm);
     }
+
+    // ---- water: a rare calm tarn in a low wet hollow (own rng stream) ----
+    // Most chunks return null; only the few that hold a deep, wet basin get a pool.
+    // The lit surface mesh drinks the sky; a ragged ring of wet-mud dabs joins the
+    // shared splat layer so the shoreline reads wet and broken, not a drawn outline.
+    const waterRnd = mulberry32(hash2(cx, cz, (WORLD_SEED ^ 0x7a7e12) >>> 0));
+    const water = buildWater(field, cx, cz, waterRnd);
+    if (water) {
+      this.waterGeo = water.surfaceGeo;
+      const pool = new THREE.Mesh(water.surfaceGeo, waterMat);
+      pool.renderOrder = 1; // draw after the opaque bed so the slight transparency reads
+      this.group.add(pool);
+
+      if (water.shore) {
+        const sg = buildSplatGeometry(
+          water.shore.centers, water.shore.scales, water.shore.colors,
+          water.shore.winds, water.shore.angles, water.shore.aspects,
+        );
+        sg.boundingSphere = new THREE.Sphere(
+          new THREE.Vector3(water.cx, water.level, water.cz),
+          water.radius + 6,
+        );
+        this.shoreGeo = sg;
+        const shore = new THREE.Mesh(sg, pointMat);
+        shore.frustumCulled = true;
+        this.group.add(shore);
+      }
+    }
+
+    // ---- sparse distant life: grazing deer/sheep, the rare wheeling bird ----
+    // (own rng stream inside fauna.ts; most chunks get nothing back)
+    this.fauna = scatterFauna(field, cx, cz);
+    if (this.fauna) this.group.add(this.fauna.object);
+  }
+
+  /** Tick the chunk's gentle fauna animation (no-op if the chunk has none). */
+  update(time: number) {
+    this.fauna?.update?.(time);
   }
 
   dispose(scene: THREE.Scene) {
@@ -282,6 +350,9 @@ export class Chunk {
     this.folGeo?.dispose();
     this.flowerGeo?.dispose();
     this.weedGeo?.dispose();
+    this.waterGeo?.dispose();
+    this.shoreGeo?.dispose();
+    this.fauna?.dispose();
   }
 }
 

@@ -32,15 +32,17 @@ export function buildPostProcessing(
     let col: any = rgba.rgb;
     // Midtone contrast — anchors the darks so the foreground reads deep (depth),
     // without crushing blacks or blowing highlights.
-    col = col.mul(col.mul(0.30).add(0.80));
+    col = col.mul(col.mul(0.28).add(0.82));
+    // WARM the whole frame — a golden afternoon, not a cold morning. Lifts red,
+    // holds green, pulls blue down so the cool haze reads as sunlit air.
+    col = col.mul(vec3(1.075, 1.005, 0.90));
     const l1 = luminance(col);
-    // Restore moderate chroma: the clear foreground stays rich (fighting the wash)
-    // while the haze still desaturates the distance into atmosphere.
+    // Moderate chroma so the clear foreground stays rich; haze still desaturates distance.
     col = mix(vec3(l1, l1, l1), col, float(1.16));
-    col = col.add(vec3(0.018, 0.006, -0.012).mul(l1)); // restrained warm light / cool shade
+    col = col.add(vec3(0.05, 0.022, -0.008).mul(l1)); // golden key in the lights
     const vg = screenUV.sub(0.5);
-    const vig = float(1.0).sub(dot(vg, vg).mul(0.64)); // 1 at centre → darker at edges
-    col = mix(col.mul(vec3(0.72, 0.84, 0.78)), col, vig); // edges deepen toward cool moss
+    const vig = float(1.0).sub(dot(vg, vg).mul(0.6)); // 1 at centre → darker at edges
+    col = mix(col.mul(vec3(0.84, 0.74, 0.58)), col, vig); // edges deepen toward warm umber
     return vec4(col, 1.0);
   });
 

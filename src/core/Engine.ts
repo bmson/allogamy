@@ -62,11 +62,11 @@ export class Engine {
       CAM_FAR,
     );
 
-    // Bright, clean midday light: strong hemisphere fill keeps the greens
-    // saturated, a warm key sun adds soft form.
-    const hemi = new THREE.HemisphereLight(palette.skyZenith.clone(), palette.groundBounce.clone(), 1.05);
+    // Warm, low-afternoon light: a softer hemisphere fill (less flat) lets the
+    // strong, warm directional key carve form into the lit meshes — golden, not cold.
+    const hemi = new THREE.HemisphereLight(palette.skyZenith.clone(), palette.groundBounce.clone(), 0.62);
     scene.add(hemi);
-    const sun = new THREE.DirectionalLight(palette.sun.clone(), 2.0);
+    const sun = new THREE.DirectionalLight(palette.sun.clone(), 2.6);
     sun.position.set(...SUN_DIR).multiplyScalar(120);
     scene.add(sun);
     scene.add(sun.target);

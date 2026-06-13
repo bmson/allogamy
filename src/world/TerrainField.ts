@@ -23,6 +23,7 @@ export class TerrainField {
   private rN: Noise2D; // rock patches
   private fN: Noise2D; // forest density
   private dN: Noise2D; // dry/lime patches
+  private wN: Noise2D; // domain-warp + frayed path edges (also drives wetness)
 
   constructor(seed: number) {
     this.hN = new Noise2D(seed);
@@ -31,6 +32,7 @@ export class TerrainField {
     this.rN = new Noise2D((seed * 53 + 17) >>> 0);
     this.fN = new Noise2D((seed * 71 + 211) >>> 0);
     this.dN = new Noise2D((seed * 89 + 307) >>> 0);
+    this.wN = new Noise2D((seed * 113 + 401) >>> 0);
   }
 
   /** Dry/lime patches in [0,1] — drives hot-lime grass overrides. */
@@ -51,15 +53,55 @@ export class TerrainField {
     const detail = this.hN.fbm(x * 0.02, z * 0.02, 2);
     // Taller, more pronounced hills for depth and overlapping ridgelines.
     let y = continent * 105 + ridges * 55 + hills * 26 + detail * 3.5;
+    // Scoop the wet basins lower so pools nestle in genuine hollows (and the land
+    // reads with more relief). The dip is squared so it only bites where wetness is
+    // strong — a few cupped low places, not a general lowering.
+    const wet = this.wetness(x, z);
+    y -= wet * wet * 16;
     // Carve paths a touch lower so they read as worn tracks.
     y -= this.pathMask(x, z) * 1.4;
     return y;
   }
 
-  /** Path strength in [0,1]: the zero-contours of a warped fBm form winding tracks. */
+  /**
+   * Path strength in [0,1]: the zero-contours of a warped fBm form winding tracks.
+   * WILD by construction — the tracks are not clean ribbons:
+   *  - the sample coords are DOMAIN-WARPED, so tracks meander, braid and fork;
+   *  - the half-width breathes spatially, so a path swells, narrows and FADES out
+   *    entirely in stretches (a track that peters into the grass and resumes);
+   *  - the |contour| distance is perturbed by a high-frequency EDGE noise, so the
+   *    grass/path boundary is frayed and ragged — grass pushes onto the track in
+   *    tongues and the worn earth bleeds out in fingers, never a smooth band.
+   */
   pathMask(x: number, z: number): number {
-    const v = this.pN.fbm(x * 0.0019, z * 0.0019, 3);
-    return 1 - THREE.MathUtils.smoothstep(Math.abs(v), 0.018, 0.085);
+    // Domain warp: shove the lookup around by a lower-frequency flow field so the
+    // track wanders organically instead of tracing a tidy noise contour.
+    const wx = this.wN.fbm(x * 0.0011 + 19, z * 0.0011 - 7, 2) * 230;
+    const wz = this.wN.fbm(x * 0.0011 - 31, z * 0.0011 + 23, 2) * 230;
+    const px = x + wx, pz = z + wz;
+
+    const v = this.pN.fbm(px * 0.0019, pz * 0.0019, 4);
+
+    // Half-width breathes between ~0 (track fades to nothing) and full worn track.
+    const widthN = this.wN.fbm(x * 0.0016 + 5, z * 0.0016 + 5, 2); // ~[-1,1]
+    const half = THREE.MathUtils.clamp(0.062 + widthN * 0.05, 0.0, 0.11);
+    if (half <= 0.001) return 0; // a stretch where the path has worn away entirely
+
+    // Frayed edge: nibble the contour distance with fine noise so the rim breaks up
+    // into ragged tongues/fingers rather than a clean feathered band.
+    const fray = this.wN.fbm(x * 0.05, z * 0.05, 3) * 0.026;
+    const d = Math.abs(v) + fray;
+    return 1 - THREE.MathUtils.smoothstep(d, half * 0.22, half);
+  }
+
+  /**
+   * Wetness in [0,1] — a broad, slow field marking the rare low basins where a
+   * calm pool could gather. High only in a few places; water also requires the
+   * terrain to actually dip into a hollow (see Chunk water placement), so pools
+   * stay sparse. Kept analytic & cheap (sampled, never per-frame).
+   */
+  wetness(x: number, z: number): number {
+    return THREE.MathUtils.smoothstep(this.wN.fbm(x * 0.0013 - 61, z * 0.0013 + 47, 3), 0.28, 0.62);
   }
 
   /** Surface normal via central differences. */
@@ -99,12 +141,24 @@ export class TerrainField {
     // Shade and deepen on slopes.
     out.lerp(palette.grassDark, THREE.MathUtils.clamp(slope * 1.5, 0, 0.7));
     out.lerp(palette.grassDeep, THREE.MathUtils.smoothstep(slope, 0.18, 0.5) * 0.3);
+    // Damp, deep-green margins around the wet basins for richer value depth.
+    out.lerp(palette.grassDeep, THREE.MathUtils.smoothstep(this.wetness(x, z), 0.45, 0.85) * 0.4);
 
-    // Dirt paths.
+    // Dirt paths — with WORN, BROKEN-UP margins rather than a clean fill. A medium
+    // mottle scatters bare patches & damp dark pockets across the track, and a pale
+    // grit/pebble fleck rides the frayed outer rim so the edge reads as scuffed and
+    // ragged, never a painted ribbon.
     if (path > 0.01) {
       const dry = this.tN.noise(x * 0.05, z * 0.05) * 0.5 + 0.5;
       _earth.copy(palette.pathEarth).lerp(palette.pathEarthDry, dry);
+      // mottle the bare earth so it isn't a flat slab (scuffed light/dark patches)
+      const mottle = (this.dN.noise(x * 0.09, z * 0.09) * 0.5 + 0.5 - 0.5) * 0.22;
+      _earth.offsetHSL(0, 0, mottle);
       out.lerp(_earth, THREE.MathUtils.smoothstep(path, 0.1, 0.7));
+      // pale grit along the worn outer band (path is mid, not full), broken by noise
+      const rim = (1 - Math.abs(path - 0.42) * 3.0);
+      const grit = this.rN.noise(x * 0.12, z * 0.12) * 0.5 + 0.5;
+      if (rim > 0 && grit > 0.55) out.lerp(palette.pathPebble, rim * (grit - 0.55) * 0.8);
     }
 
     // Rock.

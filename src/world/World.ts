@@ -16,6 +16,7 @@ export class World {
   private pointMat: THREE.Material;
   private rockMat: THREE.Material;
   private trunkMat: THREE.Material;
+  private waterMat: THREE.Material;
   private protos: TreeProto[];
   private bushProtos: TreeProto[];
 
@@ -45,6 +46,17 @@ export class World {
       roughness: 0.95,
       metalness: 0,
       flatShading: true,
+    });
+    // Calm water: vertex-coloured (cool sky tones baked in) but LIT and smooth, so
+    // the sun + sky hemisphere skim a quiet sheen off it. Low roughness reads as a
+    // still, reflective surface without an env map; slightly transparent so the
+    // muddy shore beneath feathers through at the rim.
+    this.waterMat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.12,
+      metalness: 0.0,
+      transparent: true,
+      opacity: 0.9,
     });
     this.protos = createTreePrototypes(WORLD_SEED);
     this.bushProtos = createBushPrototypes(WORLD_SEED);
@@ -93,12 +105,17 @@ export class World {
       if (this.chunks.has(key)) continue;
       const ch = new Chunk(
         cx, cz, this.field,
-        this.meshMat, this.pointMat, this.rockMat, this.trunkMat, this.protos, this.bushProtos,
+        this.meshMat, this.pointMat, this.rockMat, this.trunkMat, this.waterMat, this.protos, this.bushProtos,
       );
       this.scene.add(ch.group);
       this.chunks.set(key, ch);
       n++;
     }
+  }
+
+  /** Tick gentle per-chunk fauna animation (head-bob, tail flick, soaring bird). */
+  tickFauna(time: number) {
+    for (const ch of this.chunks.values()) ch.update(time);
   }
 
   /** True once the 3×3 block under the bird exists — used to reveal the scene. */
