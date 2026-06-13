@@ -2,7 +2,7 @@ import * as THREE from 'three/webgpu';
 import { TerrainField } from './TerrainField';
 import { mulberry32, hash2 } from '../core/rng';
 import { palette } from '../render/palette';
-import { buildSplatGeometry } from '../render/SplatMaterial';
+import { buildSplatGeometryMerged, SplatLayer } from '../render/SplatMaterial';
 import { buildBoulders } from './rock';
 import { scatterTrees, TreeProto } from './tree';
 // (TreeProto covers both trees and bushes)
@@ -28,14 +28,12 @@ const SUNX = _sun.x, SUNY = _sun.y, SUNZ = _sun.z;
 export class Chunk {
   readonly group = new THREE.Group();
   private meshGeo: THREE.BufferGeometry;
+  // The whole painted field (terrain carpet + tree/bush foliage + flowers + weeds
+  // + wet-mud shore) is merged into ONE instanced geometry → one draw call.
   private pointGeo: THREE.BufferGeometry;
   private rockGeo: THREE.BufferGeometry | null = null;
   private trunkGeo: THREE.BufferGeometry | null = null;
-  private folGeo: THREE.BufferGeometry | null = null;
-  private flowerGeo: THREE.BufferGeometry | null = null;
-  private weedGeo: THREE.BufferGeometry | null = null;
   private waterGeo: THREE.BufferGeometry | null = null;
-  private shoreGeo: THREE.BufferGeometry | null = null;
   private fauna: ChunkFauna | null = null;
 
   constructor(
@@ -245,20 +243,22 @@ export class Chunk {
       w++;
     }
 
-    const ig = buildSplatGeometry(
-      centers.slice(0, w * 3), scales.slice(0, w), colors.slice(0, w * 3),
-      winds.slice(0, w), angles.slice(0, w), aspects.slice(0, w),
-    );
-    // The quad template is tiny, so set a bound that actually covers the chunk
-    // (otherwise frustum culling would drop the whole chunk early).
-    ig.boundingSphere = new THREE.Sphere(
-      new THREE.Vector3(ox + S / 2, (minY + maxY) / 2, oz + S / 2),
-      Math.hypot(S * 0.72, (maxY - minY) / 2 + 4) + 4,
-    );
-    this.pointGeo = ig;
-    const splats = new THREE.Mesh(ig, pointMat);
-    splats.frustumCulled = true;
-    this.group.add(splats);
+    // Collect every layer that shares pointMat so they merge into ONE draw call.
+    // The terrain carpet is the first (largest) layer; foliage / flowers / weeds /
+    // shore append below. Each keeps its exact per-instance data — the merge only
+    // collapses draw calls, the painted field is byte-for-byte the same.
+    const splatLayers: SplatLayer[] = [{
+      centers: centers.slice(0, w * 3),
+      scales: scales.slice(0, w),
+      colors: colors.slice(0, w * 3),
+      winds: winds.slice(0, w),
+      angles: angles.slice(0, w),
+      aspects: aspects.slice(0, w),
+    }];
+    // Bound that actually covers the chunk (the quad template is tiny). Foliage is
+    // taller than the heightfield, so the radius grows below to cover canopies.
+    let splatMinY = minY;
+    let splatMaxY = maxY;
 
     // ---- boulders (independent rng stream so it can't shift splat layout) ----
     const rockRnd = mulberry32(hash2(cx, cz, (WORLD_SEED ^ 0xb07de7) >>> 0));
@@ -281,47 +281,23 @@ export class Chunk {
         this.group.add(new THREE.Mesh(tg, trunkMat));
       }
 
-      const fg = buildSplatGeometry(trees.folCenter, trees.folScale, trees.folCol, trees.folWind, trees.folAngle, trees.folAspect);
-      fg.boundingSphere = trees.bound.clone();
-      this.folGeo = fg;
-      const fol = new THREE.Mesh(fg, pointMat);
-      fol.frustumCulled = true;
-      this.group.add(fol);
+      splatLayers.push({
+        centers: trees.folCenter, scales: trees.folScale, colors: trees.folCol,
+        winds: trees.folWind, angles: trees.folAngle, aspects: trees.folAspect,
+      });
+      // Trees rise above the heightfield — grow the splat bound to cover canopies.
+      const tb = trees.bound;
+      splatMinY = Math.min(splatMinY, tb.center.y - tb.radius);
+      splatMaxY = Math.max(splatMaxY, tb.center.y + tb.radius);
     }
 
     // ---- wild flowers: clustered bright blooms on open grass ----
     const flowers = scatterFlowers(field, cx, cz);
-    if (flowers) {
-      const flg = buildSplatGeometry(
-        flowers.centers, flowers.scales, flowers.colors,
-        flowers.winds, flowers.angles, flowers.aspects,
-      );
-      flg.boundingSphere = new THREE.Sphere(
-        new THREE.Vector3(ox + S / 2, (minY + maxY) / 2, oz + S / 2),
-        Math.hypot(S * 0.72, (maxY - minY) / 2 + 4) + 4,
-      );
-      this.flowerGeo = flg;
-      const blooms = new THREE.Mesh(flg, pointMat);
-      blooms.frustumCulled = true;
-      this.group.add(blooms);
-    }
+    if (flowers) splatLayers.push(flowers);
 
     // ---- undergrowth: plush ground cover between turf and bushes ----
     const weeds = scatterWeeds(field, cx, cz);
-    if (weeds) {
-      const wg = buildSplatGeometry(
-        weeds.centers, weeds.scales, weeds.colors,
-        weeds.winds, weeds.angles, weeds.aspects,
-      );
-      wg.boundingSphere = new THREE.Sphere(
-        new THREE.Vector3(ox + S / 2, (minY + maxY) / 2, oz + S / 2),
-        Math.hypot(S * 0.72, (maxY - minY) / 2 + 4) + 6,
-      );
-      this.weedGeo = wg;
-      const wm = new THREE.Mesh(wg, pointMat);
-      wm.frustumCulled = true;
-      this.group.add(wm);
-    }
+    if (weeds) splatLayers.push(weeds);
 
     // ---- water: a rare calm tarn in a low wet hollow (own rng stream) ----
     // Most chunks return null; only the few that hold a deep, wet basin get a pool.
@@ -335,21 +311,23 @@ export class Chunk {
       pool.renderOrder = 1; // draw after the opaque bed so the slight transparency reads
       this.group.add(pool);
 
-      if (water.shore) {
-        const sg = buildSplatGeometry(
-          water.shore.centers, water.shore.scales, water.shore.colors,
-          water.shore.winds, water.shore.angles, water.shore.aspects,
-        );
-        sg.boundingSphere = new THREE.Sphere(
-          new THREE.Vector3(water.cx, water.level, water.cz),
-          water.radius + 6,
-        );
-        this.shoreGeo = sg;
-        const shore = new THREE.Mesh(sg, pointMat);
-        shore.frustumCulled = true;
-        this.group.add(shore);
-      }
+      if (water.shore) splatLayers.push(water.shore);
     }
+
+    // ---- merge every pointMat layer into ONE instanced draw call ----
+    // Terrain carpet + foliage + flowers + weeds + shore all share the splat
+    // material, so we concatenate their per-instance arrays and draw the chunk's
+    // entire painted field at once (was 4–5 draw calls per chunk). The instances
+    // are unchanged, so the look is identical — this only cuts draw calls.
+    const ig = buildSplatGeometryMerged(splatLayers);
+    ig.boundingSphere = new THREE.Sphere(
+      new THREE.Vector3(ox + S / 2, (splatMinY + splatMaxY) / 2, oz + S / 2),
+      Math.hypot(S * 0.72, (splatMaxY - splatMinY) / 2 + 4) + 6,
+    );
+    this.pointGeo = ig;
+    const splats = new THREE.Mesh(ig, pointMat);
+    splats.frustumCulled = true;
+    this.group.add(splats);
 
     // ---- sparse distant life: grazing deer/sheep, the rare wheeling bird ----
     // (own rng stream inside fauna.ts; most chunks get nothing back)
@@ -365,14 +343,10 @@ export class Chunk {
   dispose(scene: THREE.Scene) {
     scene.remove(this.group);
     this.meshGeo.dispose();
-    this.pointGeo.dispose();
+    this.pointGeo.dispose(); // the merged terrain+foliage+flowers+weeds+shore field
     this.rockGeo?.dispose();
     this.trunkGeo?.dispose();
-    this.folGeo?.dispose();
-    this.flowerGeo?.dispose();
-    this.weedGeo?.dispose();
     this.waterGeo?.dispose();
-    this.shoreGeo?.dispose();
     this.fauna?.dispose();
   }
 }

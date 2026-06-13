@@ -114,3 +114,52 @@ export function buildSplatGeometry(
   ig.instanceCount = scales.length;
   return ig;
 }
+
+// One splat layer: the six per-instance attribute arrays (the same contract
+// buildSplatGeometry expects). `centers`/`colors` hold 3 floats per instance,
+// the rest 1; all are consistent in implied instance count.
+export interface SplatLayer {
+  centers: Float32Array;
+  scales: Float32Array;
+  colors: Float32Array;
+  winds: Float32Array;
+  angles: Float32Array;
+  aspects: Float32Array;
+}
+
+/**
+ * Concatenate several splat layers into ONE InstancedBufferGeometry so a chunk's
+ * whole painted field (terrain carpet + foliage + flowers + weeds + shore) draws
+ * in a SINGLE draw call instead of one per layer. The attribute layout is byte-
+ * for-byte identical to buildSplatGeometry — every instance keeps its exact
+ * centre/scale/colour/wind/angle/aspect — so the render is visually unchanged;
+ * this only collapses draw calls. Skips empty layers. Caller sets boundingSphere.
+ */
+export function buildSplatGeometryMerged(layers: SplatLayer[]): THREE.InstancedBufferGeometry {
+  let total = 0;
+  for (const l of layers) total += l.scales.length;
+
+  const centers = new Float32Array(total * 3);
+  const scales = new Float32Array(total);
+  const colors = new Float32Array(total * 3);
+  const winds = new Float32Array(total);
+  const angles = new Float32Array(total);
+  const aspects = new Float32Array(total);
+
+  let o1 = 0; // running instance offset (scalar attributes)
+  let o3 = 0; // running offset for the vec3 attributes
+  for (const l of layers) {
+    const n = l.scales.length;
+    if (n === 0) continue;
+    centers.set(l.centers, o3);
+    colors.set(l.colors, o3);
+    scales.set(l.scales, o1);
+    winds.set(l.winds, o1);
+    angles.set(l.angles, o1);
+    aspects.set(l.aspects, o1);
+    o1 += n;
+    o3 += n * 3;
+  }
+
+  return buildSplatGeometry(centers, scales, colors, winds, angles, aspects);
+}
