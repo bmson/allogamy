@@ -39,8 +39,8 @@ export const palette = {
   // water — rare calm tarns nestled in hollows. Cool and luminous, drinking the
   // sky: a deep blue-green body, a paler sun-skimmed shallow, and a wet dark mud
   // rim where the pool meets the turf.
-  waterDeep: new THREE.Color('#2f6f86'), // cool blue-green body, reflecting zenith
-  waterShallow: new THREE.Color('#7fb6bc'), // pale sun-skimmed shallows / sky sheen
+  waterDeep: new THREE.Color('#5a9bb5'), // brighter blue body — reads as water, not a black mirror
+  waterShallow: new THREE.Color('#abd9e2'), // bright pale sun-skimmed shallows / sky sheen
   waterEdge: new THREE.Color('#4a3a28'), // wet dark mud at the shoreline
 
   // wildflowers — the colour punctuation we were missing (esp. violet)
@@ -53,8 +53,8 @@ export const palette = {
 
   // trees — deliberately deeper & richer than the grass so canopies read as
   // distinct masses against the bright chartreuse turf.
-  bark: new THREE.Color('#6b4a2f'),
-  barkDark: new THREE.Color('#3c2a19'),
+  bark: new THREE.Color('#8a6038'), // warmer, lighter brown so trunks read brown (not near-black)
+  barkDark: new THREE.Color('#573a22'),
   foliageLight: new THREE.Color('#6fb53c'),
   foliage: new THREE.Color('#357827'),
   foliageDark: new THREE.Color('#1c4d1f'),

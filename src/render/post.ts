@@ -151,7 +151,7 @@ export function buildPostProcessing(
     col.addAssign(vec3(1.0, 0.97, 0.9).mul(spec).mul(lum(col)).mul(0.2).mul(k));
 
     // ---- 4) MONET GRADE ----
-    col.assign(col.sub(0.5).mul(1.18).add(0.5)); // higher contrast — deeper darks, brighter lights
+    col.assign(col.sub(0.5).mul(1.1).add(0.5)); // gentle contrast — enough depth without crushing darks to black
     const l1 = lum(col);
     col.assign(mix(vec3(l1), col, uChroma)); // +chroma
     col.addAssign(vec3(0.05, 0.025, -0.015).mul(l1)); // warm lights

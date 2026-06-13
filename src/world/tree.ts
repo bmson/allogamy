@@ -119,9 +119,9 @@ function foliageColor(rnd: () => number, type: TreeType, lit: number, warmth = 0
     // broadleaf: deep cool emerald in shade → richer green crowns in sun, swung by
     // per-tree warmth across emerald (cool) ↔ chartreuse ↔ the odd golden turning
     // tree. Base hue sits cooler (~0.36) and lightness lower than the turf for pop.
-    h = 0.31 - lit * 0.04 - warmth * 0.08 + (rnd() - 0.5) * 0.03; // warm earthy green
-    s = 0.48 + (1 - lit) * 0.1 + warmth * 0.05 + rnd() * 0.05; // earthy moderate sat
-    l = 0.34 + lit * 0.30 + warmth * 0.04 + (rnd() - 0.5) * 0.07; // LIGHTER than the darker turf → canopies pop
+    h = 0.31 - lit * 0.04 - warmth * 0.15 + (rnd() - 0.5) * 0.04; // WIDE per-tree hue: olive ↔ emerald ↔ blue-green
+    s = 0.46 + (1 - lit) * 0.1 + warmth * 0.1 + rnd() * 0.06; // warm trees richer, cool trees softer
+    l = 0.34 + lit * 0.30 + warmth * 0.09 + (rnd() - 0.5) * 0.08; // warm lighter / cool darker → strong value variety
   }
   // Golden-turning override (broadleaf/bush only): blend the whole dab toward a
   // warm autumn ochre as `golden` rises, so a handful of trees clearly turn.

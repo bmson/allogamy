@@ -85,14 +85,17 @@ export class World {
       metalness: 0,
       flatShading: true,
     });
-    // Calm water: vertex-coloured (cool sky tones baked in) but LIT and smooth, so
-    // the sun + sky hemisphere skim a quiet sheen off it. Low roughness reads as a
-    // still, reflective surface without an env map; slightly transparent so the
-    // muddy shore beneath feathers through at the rim.
+    // Calm water: vertex-coloured, LIT, but DIFFUSE (not a mirror). With no env map a
+    // low-roughness surface reflected nothing and read as near-black; so we raise the
+    // roughness and add a gentle sky-blue emissive lift so the water always reads as
+    // bright water catching the sky, never a dark hole. Slightly transparent so the
+    // muddy shore feathers through at the rim.
     this.waterMat = new THREE.MeshStandardMaterial({
       vertexColors: true,
-      roughness: 0.12,
+      roughness: 0.55,
       metalness: 0.0,
+      emissive: new THREE.Color('#cfe8f8'), // sky-blue lift (cheap stand-in for a sky reflection)
+      emissiveIntensity: 0.35,
       transparent: true,
       opacity: 0.9,
     });
