@@ -19,9 +19,9 @@ import { FOG_NEAR, FOG_FAR, WIND_STRENGTH } from '../config';
 // Post-processing painterly grade (post.ts paint() node).
 export const uGlow = uniform(0.7); // halation glow strength — was const GLOW
 export const uImpasto = uniform(0.0); // canvas relief / texture — was const IMPASTO
-export const uChroma = uniform(0.95); // grade saturation (<1 desaturates). The acid
-// look was mostly HUE (turf too yellow) — fixed toward true green in Chunk/tree — so
-// saturation can sit near neutral for a rich, natural meadow. Tune live via the panel.
+export const uChroma = uniform(1.0); // grade saturation at neutral — the lush, clean
+// green now lives in the baked colours (true-green hue, lifted off black), so the post
+// grade neither boosts to acid nor pulls to mud. Tune live via the panel.
 export const uVignette = uniform(1.0); // corner darkening amount
 export const uBleed = uniform(0.08); // oil-paint smear: blend colour along contours (post.ts)
 

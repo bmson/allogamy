@@ -106,22 +106,22 @@ function foliageColor(rnd: () => number, type: TreeType, lit: number, warmth = 0
   if (type === 'conifer') {
     // deep spruce blue-green; stays cool, saturated and DARK so the conifers anchor
     // the wood as the deepest masses, lit tips lift a little toward teal-green.
-    h = 0.375 - lit * 0.05 - warmth * 0.03 + (rnd() - 0.5) * 0.03;
-    s = 0.58 + (1 - lit) * 0.14 + rnd() * 0.07;
-    l = 0.10 + lit * 0.34 + (rnd() - 0.5) * 0.06;
+    h = 0.40 - lit * 0.04 - warmth * 0.03 + (rnd() - 0.5) * 0.03; // cool spruce, distinct from turf
+    s = 0.52 + (1 - lit) * 0.12 + rnd() * 0.06; // rich (not muddy)
+    l = 0.22 + lit * 0.24 + (rnd() - 0.5) * 0.05; // deepest masses but no near-black
   } else if (type === 'bush') {
     // warmer, brighter yellow-greens for low foliage catching light — but pulled a
     // touch deeper/cooler than before so even ground cover separates from turf.
-    h = 0.32 - lit * 0.08 - warmth * 0.04 + (rnd() - 0.5) * 0.035;
-    s = 0.6 + (1 - lit) * 0.1 + rnd() * 0.07;
-    l = 0.15 + lit * 0.40 + warmth * 0.02 + (rnd() - 0.5) * 0.07;
+    h = 0.34 - lit * 0.05 - warmth * 0.04 + (rnd() - 0.5) * 0.035;
+    s = 0.55 + (1 - lit) * 0.1 + rnd() * 0.06; // lush
+    l = 0.30 + lit * 0.26 + warmth * 0.02 + (rnd() - 0.5) * 0.06; // no near-black
   } else {
     // broadleaf: deep cool emerald in shade → richer green crowns in sun, swung by
     // per-tree warmth across emerald (cool) ↔ chartreuse ↔ the odd golden turning
     // tree. Base hue sits cooler (~0.36) and lightness lower than the turf for pop.
-    h = 0.36 - lit * 0.09 - warmth * 0.075 + (rnd() - 0.5) * 0.03;
-    s = 0.6 + (1 - lit) * 0.14 + warmth * 0.05 + rnd() * 0.06;
-    l = 0.11 + lit * 0.44 + warmth * 0.04 + (rnd() - 0.5) * 0.08;
+    h = 0.37 - lit * 0.05 - warmth * 0.08 + (rnd() - 0.5) * 0.03; // a touch cooler than turf → separates
+    s = 0.58 + (1 - lit) * 0.1 + warmth * 0.05 + rnd() * 0.05; // lush, clean (not muddy)
+    l = 0.26 + lit * 0.28 + warmth * 0.04 + (rnd() - 0.5) * 0.07; // deeper than turf, no black
   }
   // Golden-turning override (broadleaf/bush only): blend the whole dab toward a
   // warm autumn ochre as `golden` rises, so a handful of trees clearly turn.
@@ -132,7 +132,7 @@ function foliageColor(rnd: () => number, type: TreeType, lit: number, warmth = 0
   }
   // Returns the SHARED `_col` (no clone): the result is read straight into the
   // colour buffer before the next dab is computed.
-  return _col.setHSL(clamp(h, 0, 1), clamp(s, 0, 1), clamp(l, 0.04, 0.95));
+  return _col.setHSL(clamp(h, 0, 1), clamp(s, 0, 1), clamp(l, 0.18, 0.95)); // floor 0.18 → no near-black foliage
 }
 
 /** Append a tapered cylinder between a→b into the trunk arrays.

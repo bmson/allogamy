@@ -102,10 +102,10 @@ export function scatterLeaves(field: TerrainField, cx: number, cz: number): Spla
           s = 0.62 + rnd() * 0.12;
           l = 0.4 + rnd() * 0.1;
         } else {
-          // deep russet / rust-brown — the oldest, darkest fallen leaves.
+          // deep russet / rust-brown — the oldest fallen leaves (kept off black).
           h = 0.045 + rnd() * 0.03;
           s = 0.55 + rnd() * 0.12;
-          l = 0.3 + rnd() * 0.08;
+          l = 0.36 + rnd() * 0.08;
         }
         // Bake the meadow light: warm & lift in sun, cool & deepen in shade — the
         // same coupling the turf and flowers use, so litter shares the scene's light.

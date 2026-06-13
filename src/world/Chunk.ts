@@ -189,18 +189,17 @@ export class Chunk {
           const tint = field.tint(x, z) * 0.5 + 0.5;
           // Hue pulled a hair WARMER than the canopy (which is now cooler/deeper) so
           // the meadow and the tree masses separate cleanly in both hue and value.
-          let h = 0.36 - lit * 0.05 + (tint - 0.5) * 0.04; // TRUE rich green (was yellow-lime)
+          let h = 0.33 - lit * 0.04 + (tint - 0.5) * 0.04; // fresh true green
           // LUSH painted meadow (matched to the reference): a saturated verdant
           // carpet with a WIDE value range — bright sunlit lime crowns against deep
           // blue-green shadow pockets — which is what gives the turf its depth and
           // stops it reading as flat pale fuzz over bare ground.
-          let s = 0.6 + (1 - lit) * 0.12 + tint * 0.05;
-          let l = 0.16 + lit * 0.46 + (rnd() - 0.5) * 0.09;
-          if (field.dry(x, z) > 0.62) { h = 0.3; s = 0.5; l = 0.5 + lit * 0.1; } // muted dry green (not acid lime)
-          // Deep shade pockets — more of them, and deeper — for the dark/light
-          // interplay between clumps that reads as a dense, layered meadow.
-          if (rnd() < 0.22) { l *= 0.5; s += 0.08; }
-          cc.setHSL(h, THREE.MathUtils.clamp(s, 0, 1), THREE.MathUtils.clamp(l, 0.04, 0.95));
+          let s = 0.62 + (1 - lit) * 0.08 + tint * 0.04; // LUSH clean green — not muddy, not acid
+          let l = 0.36 + lit * 0.26 + (rnd() - 0.5) * 0.07; // bright fresh meadow, floor well off black
+          if (field.dry(x, z) > 0.62) { h = 0.28; s = 0.55; l = 0.54 + lit * 0.08; } // fresh dry green
+          // A mild clump-to-clump dip for life — never the near-black it used to crush to.
+          if (rnd() < 0.14) { l -= 0.07; }
+          cc.setHSL(h, THREE.MathUtils.clamp(s, 0, 1), THREE.MathUtils.clamp(l, 0.30, 0.95)); // floor 0.30 → no dark grass
           // Bigger, blade-ish dabs so the carpet reads densely planted (less bare
           // ground showing through), a minority taller and upright.
           scale = 1.0 + rnd() * 1.1;
