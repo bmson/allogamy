@@ -10,8 +10,8 @@ import * as THREE from 'three/webgpu';
 export const palette = {
   // sky / atmosphere
   skyZenith: new THREE.Color('#3875c2'),
-  skyHorizon: new THREE.Color('#cdeef7'),
-  fog: new THREE.Color('#ccdee6'), // warm pale grey horizon — strokes & mesh dissolve into it
+  skyHorizon: new THREE.Color('#ccdee6'), // = fog, so hazed hills dissolve seamlessly into the sky
+  fog: new THREE.Color('#ccdee6'), // cool pale grey-blue haze — strokes & mesh dissolve into it
   sun: new THREE.Color('#fff6df'),
   air: new THREE.Color('#ccdee6'), // distance wash for the splats (reference paper tone)
   shadow: new THREE.Color('#7e86b0'), // luminous blue-violet — shadows never black

@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import {
   attribute, uv, vec2, vec3, vec4, float, smoothstep, mix, modelViewMatrix,
-  cameraProjectionMatrix, positionGeometry, time, sin, cos, fract, luminance,
+  cameraProjectionMatrix, positionGeometry, time, sin, cos, fract, atan,
 } from 'three/tsl';
 import { palette } from './palette';
 import { FOG_NEAR, FOG_FAR, WIND_STRENGTH } from '../config';
@@ -16,10 +16,14 @@ import { FOG_NEAR, FOG_FAR, WIND_STRENGTH } from '../config';
 export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   const mat = new THREE.MeshBasicNodeMaterial();
   mat.fog = false; // we fog manually below
-  mat.transparent = false; // OPAQUE cutout → early-Z, cheap fill at high density
-  mat.depthWrite = true; // tight alpha + depth handles occlusion (no per-frame sort)
+  // Transparent brush-stamps that BLEND at their feathered rims, but with depthWrite
+  // ON and a tight near-opaque core — so dense overlapping strokes melt into a
+  // continuous painted surface without ever needing a per-frame sort (cheap, and
+  // exactly how the reference achieves its soft painterly cohesion).
+  mat.transparent = true;
+  mat.depthWrite = true;
   mat.depthTest = true;
-  mat.alphaTest = 0.42; // defined notched stamps; density+colour give cohesion
+  mat.alphaTest = 0.04; // drop the empty rim so the cores still write clean depth
 
   const aCenter = attribute('aCenter', 'vec3');
   const aScale = attribute('aScale', 'float');
@@ -46,30 +50,32 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   const viewPos = vec4(centerView.xyz.add(vec3(corner, 0.0)), 1.0);
   mat.vertexNode = cameraProjectionMatrix.mul(viewPos);
 
-  // Soft analytic dab: a slightly-irregular round falloff (wobble seeded from the
-  // world position so each differs) with a WIDE feathered edge → strokes feather
-  // into each other. No hard cutoff, no per-dab texture.
+  // Irregular notched leaf-clump silhouette (matched to the reference): a tight
+  // feathered brush-stamp with a near-opaque interior and a thin painted rim that
+  // blends. The notch is keyed to a per-stamp seed hashed from world position, so
+  // no two stamps repeat and the field never reads as a grid of identical discs.
   const p = uv().sub(vec2(0.5, 0.5)).mul(2.0); // -1..1
   const rad = p.length();
+  const ang = atan(p.y, p.x);
   const seed = fract(sin(aCenter.x.mul(12.9898).add(aCenter.z.mul(78.233))).mul(43758.5453)).mul(6.2831);
-  const wob = float(0.84)
-    .add(sin(p.x.mul(8.0).add(seed)).mul(0.06))
-    .add(sin(p.y.mul(6.0).sub(seed.mul(1.3))).mul(0.05));
-  const edge = smoothstep(wob.sub(0.28), wob, rad); // tight feathered rim → defined stamp
-  mat.opacityNode = float(1.0).sub(edge);
-  // hand-painted volume: darker rim + a grounding shadow at the bottom of the stamp
-  const ground = smoothstep(0.25, float(-0.9), p.y).mul(0.16);
-  const dab = float(1.0).sub(edge.mul(0.22)).sub(ground);
+  const wob = float(0.80)
+    .add(sin(ang.mul(5.0).add(seed)).mul(0.17))
+    .add(sin(ang.mul(9.0).sub(seed.mul(1.7))).mul(0.07));
+  mat.opacityNode = float(1.0).sub(smoothstep(wob.sub(0.12), wob, rad));
 
-  // Aerial perspective: desaturate slightly then dissolve into the pale air so
-  // strokes end in atmosphere, never at a hard edge.
+  // Flat painterly volume (NO fake sphere shading — the light is baked into aColor):
+  // darken toward the rim, plus a grounding shadow across the lower belly of the stamp.
+  const edge = smoothstep(wob.sub(0.30), wob, rad);
+  const belly = smoothstep(float(0.1), float(1.0), rad).mul(p.y.mul(0.5).add(0.5).clamp(0.0, 1.0));
+  const dab = float(1.0).sub(edge.mul(0.20)).mul(float(1.0).sub(belly.mul(0.22)));
+
+  // Aerial perspective: dissolve FULLY into the cool haze with distance, so distant
+  // hills, the streaming frontier, and every stroke all end in atmosphere — never a
+  // hard edge. This dense, close haze is what unifies the palette into one painting.
   const depth = centerView.z.negate();
   const fogF = smoothstep(float(FOG_NEAR), float(FOG_FAR), depth);
-  const air = vec3(palette.air.r, palette.air.g, palette.air.b);
-  const shaded = aColor.mul(dab);
-  const lum = luminance(shaded);
-  const desat = mix(shaded, vec3(lum, lum, lum), fogF.mul(0.2));
-  mat.colorNode = mix(desat, air, fogF.mul(0.55));
+  const fogCol = vec3(palette.fog.r, palette.fog.g, palette.fog.b);
+  mat.colorNode = mix(aColor.mul(dab), fogCol, fogF);
 
   return mat;
 }
