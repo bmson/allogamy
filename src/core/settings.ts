@@ -23,6 +23,7 @@ export const uImpasto = uniform(1.5); // canvas relief / texture (impasto)
 export const uChroma = uniform(0.97); // grade saturation
 export const uVignette = uniform(0.84); // corner darkening amount
 export const uBleed = uniform(0.0); // oil-paint smear strength (off)
+export const uPaperTex = uniform(0.18); // procedural canvas/paper noise grain over the whole frame
 
 // Splat / stroke shaping (SplatMaterial.ts).
 export const uStrokeBias = uniform(0.77); // length-axis elongation bias (aAspect.add)
@@ -54,6 +55,7 @@ export interface SettingsSnapshot {
   chroma: number;
   vignette: number;
   bleed: number;
+  paperTex: number;
   strokeBias: number;
   sizeFloor: number;
   wind: number;
@@ -73,6 +75,7 @@ export function snapshot(): SettingsSnapshot {
     chroma: uChroma.value as number,
     vignette: uVignette.value as number,
     bleed: uBleed.value as number,
+    paperTex: uPaperTex.value as number,
     strokeBias: uStrokeBias.value as number,
     sizeFloor: uSizeFloor.value as number,
     wind: uWind.value as number,

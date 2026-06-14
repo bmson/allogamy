@@ -15,8 +15,29 @@ import {
   normalize,
   screenUV,
   screenSize,
+  fract,
+  sin,
+  floor,
 } from 'three/tsl';
-import { uGlow, uImpasto, uChroma, uVignette, uBleed } from '../core/settings';
+import { uGlow, uImpasto, uChroma, uVignette, uBleed, uPaperTex } from '../core/settings';
+
+// --- procedural value-noise → fbm, for the whole-frame canvas/paper grain ------
+// A hashed value-noise on a pixel lattice, smoothstep-interpolated, summed over a
+// couple of octaves. Sampled in FRAGMENT space so it reads as a fixed canvas
+// texture the painting sits on (it doesn't swim with the camera).
+const hash2 = /*#__PURE__*/ Fn(([p]: [any]) =>
+  fract(sin(dot(p, vec2(127.1, 311.7))).mul(43758.5453)));
+
+const vnoise = /*#__PURE__*/ Fn(([p]: [any]) => {
+  const i = floor(p);
+  const f = fract(p);
+  const u: any = f.mul(f).mul(float(3.0).sub(f.mul(2.0))); // smoothstep weights
+  const a = hash2(i);
+  const b = hash2(i.add(vec2(1.0, 0.0)));
+  const c = hash2(i.add(vec2(0.0, 1.0)));
+  const d = hash2(i.add(vec2(1.0, 1.0)));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+});
 
 // Faithful TSL port of 6.html's single post pass `paintFrag` (lines ~805-872).
 // One full-screen pass that turns the rendered frame into a "painting": a
@@ -158,6 +179,16 @@ export function buildPostProcessing(
     col.addAssign(vec3(-0.01, 0.0, 0.035).mul(float(1.0).sub(l1))); // cool shadows
     const vg = screenUV.sub(0.5);
     col.mulAssign(float(1.0).sub(dot(vg, vg).mul(uVignette))); // vignette
+
+    // ---- 5) CANVAS / PAPER NOISE TEXTURE over the whole frame ----------------
+    // Two octaves of value-noise in fragment space (a fine tooth + coarser blotch)
+    // centred on 0 so it both darkens and lightens — a static paper grain the whole
+    // painting sits on, multiplied in so highlights/shadows take the tooth evenly.
+    // Strength is the live `paperTex` knob; 0 = perfectly clean.
+    const fine = vnoise(fc.mul(0.5));
+    const blotch = vnoise(fc.mul(0.13).add(vec2(19.0)));
+    const grain = fine.mul(0.65).add(blotch.mul(0.35)).sub(0.5); // ~[-0.5, 0.5]
+    col.mulAssign(float(1.0).add(grain.mul(uPaperTex)));
 
     return vec4(col, 1.0);
   });

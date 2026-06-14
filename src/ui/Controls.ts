@@ -12,7 +12,7 @@
 
 import type { Engine } from '../core/Engine';
 import {
-  uGlow, uImpasto, uChroma, uVignette, uBleed,
+  uGlow, uImpasto, uChroma, uVignette, uBleed, uPaperTex,
   uStrokeBias, uSizeFloor, uWind, uSizeJitter, uAngleJitter,
   uFogNear, uFogFar,
   jsSettings, snapshot,
@@ -137,6 +137,11 @@ export class Controls {
             id: 'bleed', label: 'bleed', min: 0, max: 1, step: 0.01, decimals: 2,
             get: () => uBleed.value as number,
             set: (v) => { uBleed.value = v; },
+          },
+          {
+            id: 'paperTex', label: 'noise', min: 0, max: 0.8, step: 0.01, decimals: 2,
+            get: () => uPaperTex.value as number,
+            set: (v) => { uPaperTex.value = v; },
           },
         ],
       },
@@ -335,6 +340,7 @@ export class Controls {
       `export const uFogNear = uniform(${s.fogNear});      // fog near (or set config.FOG_NEAR)`,
       `export const uFogFar = uniform(${s.fogFar});       // fog far  (or set config.FOG_FAR)`,
       `export const uBleed = uniform(${s.bleed});       // post.ts oil-paint bleed`,
+      `export const uPaperTex = uniform(${s.paperTex});    // post.ts canvas/paper noise grain`,
       `export const uSizeJitter = uniform(${s.sizeJitter});   // SplatMaterial per-stamp size jitter`,
       `export const uAngleJitter = uniform(${s.angleJitter});  // SplatMaterial per-stamp angle jitter`,
       '// src/core/settings.ts jsSettings (+ mirror in config.ts / Engine.ts):',
