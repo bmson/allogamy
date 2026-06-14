@@ -438,10 +438,11 @@ function sweepBodySkin(stations: Station[]): SweptSkin {
   boneRest[BONE.NECK3] = new THREE.Vector3(0, 0.69, 0.69);
   boneRest[BONE.HEAD] = new THREE.Vector3(0, 0.71, 0.86); // nape/head joint
   // The mandible hinges at the JAW joint UNDER the head — not out at the bill base.
-  // Seating the pivot back here (z≈1.0, tucked up under the skull) means the jaw's
-  // buried root rings rotate about the hinge while staying welded into the head
-  // underside: it gapes like a real jaw and can never swing free of the face.
-  boneRest[BONE.JAW] = new THREE.Vector3(0, 0.628, 1.0); // jaw hinge (under the skull)
+  // Seating the pivot back at the jaw ROOT (z≈0.96, up at the skull underside where
+  // the trough's buried rings live) means those root rings barely move while the jaw
+  // gapes about the hinge — they stay welded into the head underside, so the jaw can
+  // never swing free of the face and the back/root stays closed through any motion.
+  boneRest[BONE.JAW] = new THREE.Vector3(0, 0.62, 0.96); // jaw hinge (jaw root, under the skull)
   for (let b = 0; b < BONE.COUNT; b++) if (!boneRest[b]) boneRest[b] = new THREE.Vector3();
 
   return { geo: g, boneRest };
@@ -454,47 +455,77 @@ function sweepBodySkin(stations: Station[]): SweptSkin {
 // it is still one draw call and one material — it just answers to the jaw bone.)
 // ===========================================================================
 function buildLowerJawSkin(): { geo: THREE.BufferGeometry } {
-  // THE LOWER MANDIBLE + GULAR POUCH, anchored so it can NEVER detach. It is a
-  // down-curved trough whose ROOT begins BACK under the skull (at the jaw hinge,
-  // z≈0.98) — not out at the bill base — and the first rings are fat and lifted so
-  // they sink UP INTO the head's underside and overlap the upper-bill base. From
-  // there it droops into the swollen gular sac, then runs forward under the bill to
-  // close against the upper mandible near the tip. Because the buried root rings
-  // share the head's underside volume (high y, wide rx) there is no gap: the jaw
-  // reads as continuous with the face. Every vertex is weighted to the JAW bone,
-  // which hinges at z≈1.0 under the skull, so the whole trough gapes/closes about
-  // that hinge without ever floating free of the head.
-  // Geometry of the upper run it must meet:
-  //   head underside  ≈ (y 0.60, z 0.95..1.10)
-  //   bill base ring   = (y 0.645, z 1.13, ry 0.05)  → underside ≈ y 0.595
-  //   bill drops to    ≈ (y 0.527, z 1.6) at the tip
-  const hingeZ = 0.98;       // root starts back under the skull
-  const N = 14;
-  const len = 0.66;          // reaches up under the bill toward the tip
+  // THE LOWER MANDIBLE + GULAR POUCH, anchored so it can NEVER detach AND so its TOP
+  // EDGE meets (slightly overlaps) the upper bill's underside along the WHOLE length —
+  // a closed beak, not a jaw floating below the bill. It is a down-curved trough whose
+  // ROOT begins BACK under the skull (at the jaw hinge, z≈0.94) — not out at the bill
+  // base — with the first rings fat and lifted so they sink UP INTO the head's
+  // underside and overlap the upper-bill base. From the hinge it runs forward; rather
+  // than drooping its TOP away from the bill, the top edge TRACKS the upper bill's
+  // underside (which itself curves down toward the tip) so the two mandibles stay
+  // parallel and shut. The gular sac is carried as a bulge of the UNDERSIDE only
+  // (`sag` swells the lower half down), so the pouch volume reads while the top stays
+  // welded against the bill. Every vertex is weighted to the JAW bone, which hinges at
+  // z≈1.0 under the skull, so the whole trough gapes/closes about that hinge without
+  // ever floating free of the head.
+  //
+  // CLOSURE MATH (verified by construction against the bill stations):
+  //   We model the upper bill's UNDERSIDE as a function of z (sampled below), then for
+  //   each ring set the top vertex to ride `OVERLAP` ABOVE that underside (a touch
+  //   higher still over the buried root so the root sinks into the face). The ring
+  //   centre is then `topTarget − ry`, so cY+ry == the bill underside + OVERLAP at
+  //   every z → the lower beak's top edge always overlaps the upper bill, no gap opens
+  //   along the length, and the root buries up into the skull underside.
+  // Upper-bill underside the top edge must meet (incl. the head/skull root region):
+  //   head/skull underside ≈ y 0.60 (z 0.94..1.10)
+  //   bill base underside  ≈ y 0.595 (z 1.13)  rising slightly to ≈0.60 (z 1.20)
+  //   then dropping        ≈ y 0.584 (1.34) → 0.555 (1.48) → 0.519 (1.60) → 0.492 (1.66 nail)
+  const billUnder: { z: number; y: number }[] = [
+    { z: 0.94, y: 0.605 }, { z: 1.06, y: 0.600 }, { z: 1.13, y: 0.595 },
+    { z: 1.20, y: 0.602 }, { z: 1.34, y: 0.584 }, { z: 1.48, y: 0.555 },
+    { z: 1.60, y: 0.519 }, { z: 1.66, y: 0.492 },
+  ];
+  const upperUnderAt = (z: number): number => {
+    if (z <= billUnder[0].z) return billUnder[0].y;
+    const last = billUnder[billUnder.length - 1];
+    if (z >= last.z) return last.y;
+    for (let i = 0; i < billUnder.length - 1; i++) {
+      const a = billUnder[i], b = billUnder[i + 1];
+      if (z >= a.z && z <= b.z) return lerp(a.y, b.y, (z - a.z) / (b.z - a.z));
+    }
+    return last.y;
+  };
+  const OVERLAP = 0.016;     // top edge sits this far ABOVE the bill underside → shut
+
+  const hingeZ = 0.94;       // root starts further back under the skull
+  const N = 16;
+  const len = 0.74;          // reaches forward to the bill tip (0.94 + 0.74 = 1.68)
   const pts: THREE.Vector3[] = [];
   const profs: { rx: number; ry: number; sag: number; buried: number }[] = [];
   for (let i = 0; i < N; i++) {
     const t = i / (N - 1);
     const z = hingeZ + t * len;
-    // BURIAL: the first ~18% of the trough is sunk up inside the head underside so
-    // its surface coincides with the face (no seam). `buried` ramps 1 → 0 by ~18%.
-    const buried = smoothstep(0.18, 0.0, t);
-    // pouch bulge envelope — fullest a third of the way along (the swollen sac)
-    const env = Math.sin(Math.PI * clamp01(t * 0.92));
-    // The underside line: lifted to meet the head at the root, drooping into the
-    // pouch, then easing back UP to kiss the upper-bill underside toward the tip so
-    // the two mandibles close with no gap at the far end either.
-    const headMeet = 0.60 + 0.02 * buried;            // root rides up into the face
-    const droop = -0.10 * smoothstep(0.0, 0.5, t) - 0.05 * env; // sag into the sac
-    const closeTip = 0.05 * smoothstep(0.6, 1.0, t);  // rise toward the upper bill tip
-    const y = lerp(headMeet, 0.60, smoothstep(0.0, 0.2, t)) + droop + closeTip;
+    // BURIAL: the first ~20% of the trough is sunk up inside the head underside so its
+    // surface coincides with the face (no seam). `buried` ramps 1 → 0 by ~20%.
+    const buried = smoothstep(0.2, 0.0, t);
+    // pouch bulge envelope — fullest about a third along (the swollen gular sac)
+    const env = Math.sin(Math.PI * clamp01(t * 0.95));
+    // ring half-heights: fat & buried at root, swelling with the gular sac, slim tip.
+    const ry = 0.016 + 0.045 * env + 0.055 * buried;
+    // TARGET TOP EDGE: ride the bill underside + overlap; the root rides a touch
+    // higher so it sinks up into the head underside. The centre is then targetTop−ry,
+    // so cY+ry == the bill underside everywhere → the beak is closed along its length.
+    const targetTop = upperUnderAt(z) + OVERLAP + 0.02 * buried;
+    const y = targetTop - ry;
     pts.push(new THREE.Vector3(0, y, z));
     profs.push({
       // root is FAT (fills the head underside so it welds in); the body of the
       // trough swells with the gular sac; the tip narrows to meet the bill.
-      rx: 0.026 + 0.052 * env + 0.05 * buried,
-      ry: 0.014 + 0.04 * env + 0.05 * buried,
-      sag: 0.55 * env,
+      rx: 0.026 + 0.055 * env + 0.05 * buried,
+      ry,
+      // the gular sac hangs the UNDERSIDE down (lower half only) — the swollen pouch —
+      // without ever lowering the top edge away from the bill.
+      sag: 0.7 * env,
       buried,
     });
   }

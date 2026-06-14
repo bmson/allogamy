@@ -597,7 +597,14 @@ export class Bird implements Updatable {
     // rolls so the eyes stay near horizontal, locked on the world — the steady,
     // soulful eye-line of a living animal carving a turn, even as it looks ahead.
     this.bHead.rotation.z = -0.34 * mRoll - 0.04 * this.bTorso.rotation.z + 0.05 * lead;
-    this.bJaw.rotation.x = 0.018 * driveDown + 0.008 * (0.5 + 0.5 * Math.sin(idle * 0.5)); // bill cracks open under load + soft idle gape
+    // JAW: the beak stays SHUT at rest. The lower mandible's top edge is built to
+    // overlap the upper bill's underside by ~0.016 along the whole length (see
+    // buildLowerJawSkin), so at rest (rotation 0) the beak reads fully closed with no
+    // gap. We allow only a tiny load-driven crack on the loaded downstroke — small
+    // enough that the built-in overlap is never fully consumed (max gape ≈0.014 rad
+    // drops the worst forward point <0.011, still inside the 0.016 overlap) — and NO
+    // idle baseline, so the resting/closed state is genuinely closed.
+    this.bJaw.rotation.x = 0.014 * driveDown; // faint crack under load only; closed at rest
 
     // --- tail: the rear extremity, with the biggest follow-through lag (steers +
     // counter-balances), fanning into the bank as a rudder and completing the body
