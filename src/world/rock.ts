@@ -282,12 +282,13 @@ export function buildBoulders(
 
   // ---- scattered lone stones -----------------------------------------------
   // Many candidates, gated by terrain: dense on rocky/steep ground, rare on grass.
-  const scatter = 7 + Math.floor(rnd() * 7);
+  const scatter = 12 + Math.floor(rnd() * 10);
   for (let i = 0; i < scatter; i++) {
     const x = ox + rnd() * S;
     const z = oz + rnd() * S;
     const surf = field.surface(x, z);
-    const p = 0.07 + surf.rock * 0.85 + surf.slope * 0.4;
+    // Higher base so lone stones dot the open MEADOW too, not just rocky/steep ground.
+    const p = 0.22 + surf.rock * 0.7 + surf.slope * 0.35;
     if (rnd() > p) continue;
 
     // Squared bias → mostly pebbles & small stones, the occasional larger boulder.
@@ -302,12 +303,12 @@ export function buildBoulders(
   // outcrop — varied sizes around a centre, overlapping so they read as one mass.
   // Sometimes a second satellite cluster nearby so the stone gathers in family
   // groups (a couple of heaps) rather than one lonely pile per chunk.
-  const clusters = 1 + (rnd() < 0.35 ? 1 : 0);
+  const clusters = 1 + (rnd() < 0.6 ? 1 : 0);
   for (let cI = 0; cI < clusters; cI++) {
     const ax = ox + rnd() * S;
     const az = oz + rnd() * S;
     const csurf = field.surface(ax, az);
-    const clusterP = 0.18 + csurf.rock * 0.9 + csurf.slope * 0.5;
+    const clusterP = 0.4 + csurf.rock * 0.7 + csurf.slope * 0.4;
     if (rnd() >= clusterP) continue;
 
     const n = 3 + Math.floor(rnd() * 5); // 3..7 stones
