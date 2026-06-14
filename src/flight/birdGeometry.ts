@@ -285,28 +285,34 @@ function bodySpine(): Station[] {
     S(new THREE.Vector3(0, 0.0, 0.22), 0.176, 0.238, 0.42, BONE.BODY), // breast
     S(new THREE.Vector3(0, 0.07, 0.52), 0.122, 0.17, 0.26, BONE.BODY, 0.4),
     S(new THREE.Vector3(0, 0.16, 0.72), 0.08, 0.102, 0.12, BONE.BODY, 1.0), // shoulder / neck root
-    // ---- S-neck (folds up & back, then forward) ----
-    S(new THREE.Vector3(0, 0.3, 0.74), 0.078, 0.086, 0.06, BONE.NECK0, 0.6),
-    S(new THREE.Vector3(0, 0.44, 0.69), 0.068, 0.076, 0.0, BONE.NECK1, 0.5),
-    S(new THREE.Vector3(0, 0.56, 0.62), 0.062, 0.07, 0.0, BONE.NECK1, 1.0),
-    S(new THREE.Vector3(0, 0.64, 0.62), 0.06, 0.068, 0.0, BONE.NECK2, 0.6),
-    S(new THREE.Vector3(0, 0.69, 0.69), 0.058, 0.066, 0.0, BONE.NECK3, 0.6),
-    S(new THREE.Vector3(0, 0.71, 0.8), 0.058, 0.064, 0.0, BONE.NECK3, 1.0), // nape into head
-    // ---- head ----
-    S(new THREE.Vector3(0, 0.71, 0.9), 0.082, 0.09, 0.0, BONE.HEAD, 0.3),
-    S(new THREE.Vector3(0, 0.7, 0.99), 0.095, 0.1, 0.0, BONE.HEAD), // crown
-    S(new THREE.Vector3(0, 0.675, 1.07), 0.082, 0.085, 0.0, BONE.HEAD),
-    S(new THREE.Vector3(0, 0.645, 1.13), 0.055, 0.05, 0.0, BONE.HEAD, 0.0), // lores → bill base
+    // ---- S-neck: the PELICAN flight FOLD. A pelican does NOT carry its head high on a
+    // vertical goose-neck — it draws the head BACK and LOW so it rests near the shoulders,
+    // the neck folded into a compact S, with the heavy bill held forward roughly level.
+    // These stations lift a little off the shoulders, arch BACK at the fold crown, then
+    // sweep forward & DOWN so the head sits LOW (y≈0.43) and drawn-in. Smooth Catmull
+    // stations → the welded skin folds without a kink, and the head is no longer a tall
+    // vertical "can". The radii also TAPER (slim neck) so it reads as a neck, not a tube.
+    S(new THREE.Vector3(0, 0.30, 0.70), 0.076, 0.084, 0.05, BONE.NECK0, 0.6),
+    S(new THREE.Vector3(0, 0.42, 0.65), 0.066, 0.074, 0.0, BONE.NECK1, 0.5),
+    S(new THREE.Vector3(0, 0.47, 0.61), 0.058, 0.066, 0.0, BONE.NECK1, 1.0), // fold crown (back)
+    S(new THREE.Vector3(0, 0.46, 0.69), 0.054, 0.06, 0.0, BONE.NECK2, 0.6),  // sweeping forward
+    S(new THREE.Vector3(0, 0.435, 0.77), 0.052, 0.058, 0.0, BONE.NECK3, 0.6),
+    S(new THREE.Vector3(0, 0.43, 0.85), 0.056, 0.06, 0.0, BONE.NECK3, 1.0),  // nape into head (low, forward)
+    // ---- head (carried LOW, just above & drawn back near the shoulders) ----
+    S(new THREE.Vector3(0, 0.44, 0.93), 0.084, 0.09, 0.0, BONE.HEAD, 0.3),
+    S(new THREE.Vector3(0, 0.445, 1.0), 0.094, 0.098, 0.0, BONE.HEAD), // crown
+    S(new THREE.Vector3(0, 0.43, 1.07), 0.08, 0.082, 0.0, BONE.HEAD),
+    S(new THREE.Vector3(0, 0.41, 1.13), 0.055, 0.05, 0.0, BONE.HEAD, 0.0), // lores → bill base
     // ---- bill: the PELICAN's signature — a LONG, deep, broad-lens bill carried
     // nearly straight forward (only a gentle droop), much longer than a gull/goose.
     // Extended tip 1.66 → 2.12 and held wider along its length (slower taper) so it
     // reads as the massive pelican bill. The lower-jaw closure table in
     // buildLowerJawSkin is matched to these z/y so the beak still shuts (no gap).
-    S(new THREE.Vector3(0, 0.632, 1.24), 0.052, 0.034, 0.0, BONE.HEAD, 0.4, 0.45),
-    S(new THREE.Vector3(0, 0.612, 1.46), 0.05, 0.026, 0.0, BONE.HEAD, 1.0, 0.7),
-    S(new THREE.Vector3(0, 0.59, 1.7), 0.044, 0.02, 0.0, BONE.HEAD, 1.0, 0.8),
-    S(new THREE.Vector3(0, 0.566, 1.94), 0.03, 0.016, 0.0, BONE.HEAD, 1.0, 0.85),
-    S(new THREE.Vector3(0, 0.548, 2.12), 0.01, 0.012, 0.0, BONE.HEAD, 1.0, 0.6), // hooked nail
+    S(new THREE.Vector3(0, 0.408, 1.24), 0.052, 0.034, 0.0, BONE.HEAD, 0.4, 0.45),
+    S(new THREE.Vector3(0, 0.392, 1.46), 0.05, 0.026, 0.0, BONE.HEAD, 1.0, 0.7),
+    S(new THREE.Vector3(0, 0.374, 1.7), 0.044, 0.02, 0.0, BONE.HEAD, 1.0, 0.8),
+    S(new THREE.Vector3(0, 0.356, 1.94), 0.03, 0.016, 0.0, BONE.HEAD, 1.0, 0.85),
+    S(new THREE.Vector3(0, 0.342, 2.12), 0.01, 0.012, 0.0, BONE.HEAD, 1.0, 0.6), // hooked nail
   ];
 }
 
@@ -437,17 +443,19 @@ function sweepBodySkin(stations: Station[]): SweptSkin {
   // fan root — so the whole rump+fan swings from the body and never detaches.
   boneRest[BONE.TAIL] = new THREE.Vector3(0, 0.045, -0.86); // rump joint (at the fan root)
   boneRest[BONE.BODY] = new THREE.Vector3(0, -0.02, -0.12); // belly centre
-  boneRest[BONE.NECK0] = new THREE.Vector3(0, 0.18, 0.73); // shoulder/neck root
-  boneRest[BONE.NECK1] = new THREE.Vector3(0, 0.42, 0.7);
-  boneRest[BONE.NECK2] = new THREE.Vector3(0, 0.6, 0.62);
-  boneRest[BONE.NECK3] = new THREE.Vector3(0, 0.69, 0.69);
-  boneRest[BONE.HEAD] = new THREE.Vector3(0, 0.71, 0.86); // nape/head joint
+  // Pivots follow the new FOLDED pelican neck (low, drawn back) so bones rotate from
+  // anatomically right joints on the folded S.
+  boneRest[BONE.NECK0] = new THREE.Vector3(0, 0.30, 0.70); // shoulder/neck root
+  boneRest[BONE.NECK1] = new THREE.Vector3(0, 0.46, 0.63); // fold crown (back)
+  boneRest[BONE.NECK2] = new THREE.Vector3(0, 0.45, 0.71);
+  boneRest[BONE.NECK3] = new THREE.Vector3(0, 0.43, 0.81);
+  boneRest[BONE.HEAD] = new THREE.Vector3(0, 0.44, 0.90); // low head joint (drawn back)
   // The mandible hinges at the JAW joint UNDER the head — not out at the bill base.
   // Seating the pivot back at the jaw ROOT (z≈0.96, up at the skull underside where
   // the trough's buried rings live) means those root rings barely move while the jaw
   // gapes about the hinge — they stay welded into the head underside, so the jaw can
   // never swing free of the face and the back/root stays closed through any motion.
-  boneRest[BONE.JAW] = new THREE.Vector3(0, 0.62, 0.96); // jaw hinge (jaw root, under the skull)
+  boneRest[BONE.JAW] = new THREE.Vector3(0, 0.36, 0.95); // jaw hinge (under the LOW skull)
   for (let b = 0; b < BONE.COUNT; b++) if (!boneRest[b]) boneRest[b] = new THREE.Vector3();
 
   return { geo: g, boneRest };
@@ -488,10 +496,14 @@ function buildLowerJawSkin(): { geo: THREE.BufferGeometry } {
   // Matched to the LENGTHENED upper bill (tip now z2.12): underside y ≈ bill-centre y
   // minus its half-height ry at each station, so the lower mandible's top edge tracks
   // the upper bill's underside all the way to the new tip and the beak stays shut.
+  // Matched to the LOW, drawn-back pelican head + lengthened bill: underside y ≈ the
+  // bill-centre y minus its half-height at each station (head/skull underside ≈0.35),
+  // so the lower mandible's top edge tracks the upper bill underside the whole length
+  // and the beak stays shut despite the head now riding low.
   const billUnder: { z: number; y: number }[] = [
-    { z: 0.94, y: 0.605 }, { z: 1.06, y: 0.600 }, { z: 1.13, y: 0.595 },
-    { z: 1.24, y: 0.598 }, { z: 1.46, y: 0.586 }, { z: 1.70, y: 0.570 },
-    { z: 1.94, y: 0.550 }, { z: 2.12, y: 0.536 },
+    { z: 0.94, y: 0.350 }, { z: 1.06, y: 0.352 }, { z: 1.13, y: 0.360 },
+    { z: 1.24, y: 0.374 }, { z: 1.46, y: 0.366 }, { z: 1.70, y: 0.354 },
+    { z: 1.94, y: 0.340 }, { z: 2.12, y: 0.330 },
   ];
   const upperUnderAt = (z: number): number => {
     if (z <= billUnder[0].z) return billUnder[0].y;

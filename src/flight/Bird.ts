@@ -81,7 +81,7 @@ const REST_WRIST = -0.1;
 // the head UP to keep the bill aimed level/forward — exactly the folded-neck,
 // bill-forward silhouette. Sign: negative rotation.x lifts/reaches the neck UP,
 // positive folds it DOWN. Tunable — dial these from a screenshot.
-const REST_NECK_X = [0.12, 0.14, 0.12, 0.10];
+const REST_NECK_X = [0, 0, 0, 0];
 
 const SCALE = 3.0;
 
@@ -588,11 +588,13 @@ export class Bird implements Updatable {
       // VERTICAL flex (up-down): the travelling wingbeat wave + the weighty spring
       // flex, both lagged down the chain. Negative X tips this bone's run upward, so
       // a positive `neckFlex` extends/lifts the neck (reaches up into the climb).
-      const wave = 0.05 * Math.sin(ph - lag) * amp + 0.03 * Math.sin(idle * 0.6 - lag * 0.5);
-      n[i].rotation.x = REST_NECK_X[i]    // pelican fold: draw the head back onto the shoulders
+      const wave = 0.025 * Math.sin(ph - lag) * amp + 0.018 * Math.sin(idle * 0.6 - lag * 0.5);
+      n[i].rotation.x = REST_NECK_X[i]    // (folded pelican neck now lives in the GEOMETRY)
         + wave * (0.7 + 0.3 * f)
-        - 0.16 * neckFlex * ease        // spring-driven up-down flex, rippling outward
-        - 0.05 * mPitch * f;            // counter-arc vs the chest tip (smooth C through climb)
+        - 0.06 * neckFlex * ease        // GENTLE spring flex — damped so the flap can't lift
+        //                                 the head back up out of the baked pelican fold
+        - 0.03 * mPitch * f;            // small counter-arc vs the chest tip through climb
+      n[i].rotation.x = Math.max(n[i].rotation.x, -0.05); // floor the LIFT (negative) so the flap can't raise the head back up into a goose-neck "can"; folding down (positive) is fine
       neckPitchSum += n[i].rotation.x;
       // SIDEWAYS sway (lateral): a slow lateral undulation with the per-joint lag so
       // the neck weaves gently side to side as it flies (alive on a glide), coupled
