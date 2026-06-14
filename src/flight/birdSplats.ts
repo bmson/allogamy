@@ -127,7 +127,7 @@ function sampleGeometry(
       // BILL FADE: `p` is still in bird-local space (nose +Z; the bill runs z≈1.2→2.1).
       // The pelican's signature bill must read SMOOTH, not foamed — so we fade the coat
       // out across the forehead (z~1.05) and place NO dabs on the bill proper (z>1.22).
-      const localZ = p.z;
+      const localX = p.x, localY = p.y, localZ = p.z;
       if (localZ > 1.22) continue; // bare smooth bill
       let billShrink = 1;
       if (localZ > 1.05) {
@@ -170,7 +170,14 @@ function sampleGeometry(
         cl2(cg * shade),
         cl2(cb * shade - warm),
       );
-      cl.angles.push(rng() * Math.PI * 2);
+      // STROKE ORIENTATION — a COHERENT flow, not per-dab random. Random angles made
+      // the oval strokes cross every which way → a matted felt. Instead derive each
+      // dab's angle from a smooth low-frequency field of its body-local position, so
+      // neighbouring dabs point the SAME way and the elongated marks read as plumage
+      // COMBED along the form (like the meadow's grass blades laid in a direction),
+      // plus a modest jitter so it stays hand-laid rather than mechanically aligned.
+      const flow = localZ * 1.7 + localY * 0.6 + Math.sin(localX * 2.3) * 0.5;
+      cl.angles.push(flow + (rng() * 2 - 1) * 0.6);
     }
   }
 }
