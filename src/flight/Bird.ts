@@ -5,6 +5,7 @@ import {
   buildBodySkin, buildWingSkin, buildLeg, buildFoot,
   BONE, WBONE, WING_JOINTS, WING_ATTACH, TARSUS_LEN, C_EYE,
 } from './birdGeometry';
+import { makeBirdMaterial } from './birdMaterial';
 
 // THE PELICAN — the soul of the piece. The player IS this bird, gliding alone
 // over the painted meadow.
@@ -98,15 +99,21 @@ export class Bird implements Updatable {
   constructor(scene: THREE.Scene, flight: FlightController) {
     this.flight = flight;
 
-    // One soft stylised body material, one for the wing membranes, plus small
-    // accent materials. Vertex colours carry the painterly wash + baked light;
-    // MeshStandard lets the real scene sun + hemisphere carve the form.
-    const bodyMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62, metalness: 0 });
-    const wingMat = new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness: 0.54, metalness: 0,
-      emissive: new THREE.Color('#3a4150'), emissiveIntensity: 0.03,
+    // CUSTOM STYLISED TSL SHADING — not PBR. The body/wing/leg surfaces are lit by a
+    // hand-painted, illustrated light model (soft wrapped diffuse, warm key / cool
+    // shade, a faint painterly broken-colour break-up, a sky-tinted fresnel rim and a
+    // gentle inked contour) so the bird reads as part of the soft painterly meadow
+    // rather than a glossy CG object. The baked per-vertex wash stays as the albedo;
+    // the shader only re-lights it. World-space normals keep the key pinned to the
+    // scene sun as the bird banks and flaps. (See birdMaterial.makeBirdMaterial.)
+    const bodyMat = makeBirdMaterial();
+    // the wing membranes keep a touch cooler/slate cast (their charcoal primaries),
+    // with a hair more contour so the long flight feathers read as separate planes.
+    const wingMat = makeBirdMaterial({
+      warmth: 0.26, contour: 0.26, emissiveTint: new THREE.Color('#3a4150'),
     });
-    const legMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0 });
+    // legs are small, warm ochre — slightly less broken-colour so they stay clean.
+    const legMat = makeBirdMaterial({ jitter: 0.035, rim: 0.22 });
 
     this.root.add(this.bob);
 
