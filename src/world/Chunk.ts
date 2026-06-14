@@ -192,13 +192,13 @@ export class Chunk {
           const tint = field.tint(x, z) * 0.5 + 0.5;
           // Hue pulled a hair WARMER than the canopy (which is now cooler/deeper) so
           // the meadow and the tree masses separate cleanly in both hue and value.
-          let h = 0.27 - lit * 0.03 + (tint - 0.5) * 0.06 + (rnd() - 0.5) * 0.1; // warm olive + WIDE per-dab hue spread
+          let h = 0.30 - lit * 0.09 + (tint - 0.5) * 0.06 + (rnd() - 0.5) * 0.1; // warm sunlit yellow-green ↔ cool blue-green shade (temperature sculpts form, like the reference)
           // LUSH painted meadow (matched to the reference): a saturated verdant
           // carpet with a WIDE value range — bright sunlit lime crowns against deep
           // blue-green shadow pockets — which is what gives the turf its depth and
           // stops it reading as flat pale fuzz over bare ground.
           let s = 0.44 + (1 - lit) * 0.08 + tint * 0.04 + (rnd() - 0.5) * 0.16; // earthy + WIDE per-dab sat variation
-          let l = 0.30 + lit * 0.26 + (rnd() - 0.5) * 0.16; // a shade darker + much MORE light/dark variation
+          let l = 0.27 + lit * 0.36 + (rnd() - 0.5) * 0.16; // WIDER light/dark range: deep shadowed slopes vs bright sunlit crowns (the reference's sculpted depth)
           // Mixed grass TONES for a richer meadow — occasional warm dry-straw and deep
           // cool-green dabs among the olive, so the grass reads as many colours, not one.
           const gv = rnd();
