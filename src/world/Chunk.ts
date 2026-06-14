@@ -208,8 +208,10 @@ export class Chunk {
           // just elongated + upright; the wind wobble sways them like real grass).
           // Reshapes existing dabs, so no extra instances.
           if (rnd() < 0.16) {
-            scale = 0.42 + rnd() * 0.38; // narrow
-            aspect = 2.6 + rnd() * 2.0; // tall thin oval = a blade
+            // stray grass STRANDS — super-thin tall blades, a touch darker than the turf.
+            cc.multiplyScalar(0.8); // slightly darker than the surrounding ground
+            scale = 0.22 + rnd() * 0.22; // super thin (narrow width)
+            aspect = 4.0 + rnd() * 3.0; // very tall thin oval = a strand
             angle = 0; // upright; the wind wobble sways it
             yoff = 1.0 + rnd() * 2.2; // rises out of the turf
             wind = 0.5 + rnd() * 0.25; // sways a touch more

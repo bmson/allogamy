@@ -25,10 +25,10 @@ export const uVignette = uniform(0.84); // corner darkening amount
 export const uBleed = uniform(0.0); // oil-paint smear strength (off)
 
 // Splat / stroke shaping (SplatMaterial.ts).
-export const uStrokeBias = uniform(0.35); // length-axis elongation bias (aAspect.add)
+export const uStrokeBias = uniform(0.77); // length-axis elongation bias (aAspect.add)
 export const uSizeFloor = uniform(0.013); // distance size-floor coefficient (depth.mul)
 export const uWind = uniform(WIND_STRENGTH); // wind sway strength (config)
-export const uSizeJitter = uniform(1.0); // per-stamp size irregularity (1 ± fraction)
+export const uSizeJitter = uniform(0.19); // per-stamp size irregularity (1 ± fraction)
 export const uAngleJitter = uniform(1.4); // per-stamp direction irregularity (radians)
 
 // Atmosphere — splat-side manual fog. scene.fog is updated separately in JS from
