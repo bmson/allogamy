@@ -17,31 +17,19 @@ export interface Updatable {
 const MAX_PIXEL_RATIO = 1.5;
 
 /**
- * Prefer WebGPU; fall back to a WebGL2 backend if WebGPU is unavailable or its
- * init fails (e.g. headless Chrome). `?webgl` forces the fallback for testing.
- *
- * `getFallback` lets the renderer downgrade to WebGL2 on its OWN if the WebGPU
- * backend faults mid-init, before our explicit catch even runs — so the first
- * `init()` already self-heals in most cases; the catch is the last-ditch retry.
+ * WebGPU only. The WebGL2 fallback has been removed for now — this piece targets
+ * the WebGPU backend exclusively, so `init()` will throw on browsers (or headless
+ * setups) without it rather than silently degrading.
  */
 async function createRenderer(): Promise<THREE.WebGPURenderer> {
-  const forceWebGL = new URLSearchParams(location.search).has('webgl');
-  try {
-    const r = new THREE.WebGPURenderer({
-      antialias: true,
-      forceWebGL,
-      // Ask the OS for the discrete GPU on dual-GPU laptops — this is an
-      // always-on flight piece, not a battery-sipper; the meadow wants the muscle.
-      powerPreference: 'high-performance',
-    });
-    await r.init();
-    return r;
-  } catch (e) {
-    console.warn('[allogamy] WebGPU init failed — falling back to WebGL2.', e);
-    const r = new THREE.WebGPURenderer({ antialias: true, forceWebGL: true });
-    await r.init();
-    return r;
-  }
+  const r = new THREE.WebGPURenderer({
+    antialias: true,
+    // Ask the OS for the discrete GPU on dual-GPU laptops — this is an
+    // always-on flight piece, not a battery-sipper; the meadow wants the muscle.
+    powerPreference: 'high-performance',
+  });
+  await r.init();
+  return r;
 }
 
 // Owns the WebGPU renderer, scene, camera, lights, and the frame loop. Modules

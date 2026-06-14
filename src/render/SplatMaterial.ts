@@ -11,7 +11,7 @@ import { uFogNear, uFogFar, uWind, uStrokeBias, uSizeFloor, uSizeJitter, uAngleJ
 // (round by default; >1 stretches into a blade/stem). The fragment paints a SOFT,
 // slightly-irregular dab with a wide feathered edge and blends it — so dense
 // overlapping strokes melt into a continuous painted surface rather than reading
-// as a mosaic of separate dabs. Works on the WebGPU and WebGL2 backends.
+// as a mosaic of separate dabs.
 
 export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   const mat = new THREE.MeshBasicNodeMaterial();

@@ -292,27 +292,43 @@ function bodySpine(): Station[] {
     // sweep forward & DOWN so the head sits LOW (y≈0.43) and drawn-in. Smooth Catmull
     // stations → the welded skin folds without a kink, and the head is no longer a tall
     // vertical "can". The radii also TAPER (slim neck) so it reads as a neck, not a tube.
-    S(new THREE.Vector3(0, 0.30, 0.70), 0.076, 0.084, 0.05, BONE.NECK0, 0.6),
-    S(new THREE.Vector3(0, 0.42, 0.65), 0.066, 0.074, 0.0, BONE.NECK1, 0.5),
-    S(new THREE.Vector3(0, 0.47, 0.61), 0.058, 0.066, 0.0, BONE.NECK1, 1.0), // fold crown (back)
-    S(new THREE.Vector3(0, 0.46, 0.69), 0.054, 0.06, 0.0, BONE.NECK2, 0.6),  // sweeping forward
-    S(new THREE.Vector3(0, 0.435, 0.77), 0.052, 0.058, 0.0, BONE.NECK3, 0.6),
-    S(new THREE.Vector3(0, 0.43, 0.85), 0.056, 0.06, 0.0, BONE.NECK3, 1.0),  // nape into head (low, forward)
-    // ---- head (carried LOW, just above & drawn back near the shoulders) ----
-    S(new THREE.Vector3(0, 0.44, 0.93), 0.084, 0.09, 0.0, BONE.HEAD, 0.3),
-    S(new THREE.Vector3(0, 0.445, 1.0), 0.094, 0.098, 0.0, BONE.HEAD), // crown
-    S(new THREE.Vector3(0, 0.43, 1.07), 0.08, 0.082, 0.0, BONE.HEAD),
-    S(new THREE.Vector3(0, 0.41, 1.13), 0.055, 0.05, 0.0, BONE.HEAD, 0.0), // lores → bill base
+    // The neck is a SLIM, round column that TAPERS so the head reads as a distinct
+    // bulb — a thick tube made the neck as wide as the head, which looked headless.
+    // A round (rx≈ry) section bends in a soft loop, so the fold no longer reads square.
+    // The neck is LATERALLY NARROW (small rx → slim from the front) but keeps vertical
+    // DEPTH (larger ry → still reads full in side profile). A pelican's neck is a thin
+    // blade from the front, not a fat round tube; rx≈ry made it look wide head-on.
+    S(new THREE.Vector3(0, 0.30, 0.70), 0.052, 0.078, 0.05, BONE.NECK0, 0.6),
+    S(new THREE.Vector3(0, 0.41, 0.66), 0.040, 0.066, 0.0, BONE.NECK1, 0.5),
+    S(new THREE.Vector3(0, 0.455, 0.635), 0.034, 0.060, 0.0, BONE.NECK1, 1.0), // fold crown (narrow)
+    S(new THREE.Vector3(0, 0.45, 0.70), 0.032, 0.058, 0.0, BONE.NECK2, 0.6),   // sweeping forward
+    S(new THREE.Vector3(0, 0.44, 0.78), 0.034, 0.060, 0.0, BONE.NECK3, 0.6),
+    S(new THREE.Vector3(0, 0.435, 0.85), 0.042, 0.066, 0.0, BONE.NECK3, 1.0),  // nape — slim front, full side
+    // ---- head: a DISTINCT round bulb, clearly fuller than the slim neck. Built nearly
+    // spherical (rx≈ry) so it reads as a rounded skull, not a boxy block, then ramps
+    // down through the forehead into the bill base. The back of the head swells up out
+    // of the narrow nape (a real head, not a continuation of the neck tube). ----
+    S(new THREE.Vector3(0, 0.436, 0.91), 0.088, 0.092, 0.0, BONE.HEAD, 0.3),
+    S(new THREE.Vector3(0, 0.445, 0.99), 0.100, 0.102, 0.0, BONE.HEAD), // crown bulb (round, > neck)
+    S(new THREE.Vector3(0, 0.439, 1.07), 0.090, 0.090, 0.0, BONE.HEAD),
+    // GRADUAL forehead taper (extra station): the crown→bill radius drop was steep
+    // enough to throw a little up-fin/saddle at the bill base; easing it over two
+    // stations lets the culmen run smoothly off the skull.
+    S(new THREE.Vector3(0, 0.428, 1.145), 0.074, 0.070, 0.0, BONE.HEAD),
+    S(new THREE.Vector3(0, 0.418, 1.20), 0.062, 0.056, 0.0, BONE.HEAD, 0.3), // bill base
     // ---- bill: the PELICAN's signature — a LONG, deep, broad-lens bill carried
     // nearly straight forward (only a gentle droop), much longer than a gull/goose.
     // Extended tip 1.66 → 2.12 and held wider along its length (slower taper) so it
     // reads as the massive pelican bill. The lower-jaw closure table in
     // buildLowerJawSkin is matched to these z/y so the beak still shuts (no gap).
-    S(new THREE.Vector3(0, 0.408, 1.24), 0.052, 0.034, 0.0, BONE.HEAD, 0.4, 0.45),
-    S(new THREE.Vector3(0, 0.392, 1.46), 0.05, 0.026, 0.0, BONE.HEAD, 1.0, 0.7),
-    S(new THREE.Vector3(0, 0.374, 1.7), 0.044, 0.02, 0.0, BONE.HEAD, 1.0, 0.8),
-    S(new THREE.Vector3(0, 0.356, 1.94), 0.03, 0.016, 0.0, BONE.HEAD, 1.0, 0.85),
-    S(new THREE.Vector3(0, 0.342, 2.12), 0.01, 0.012, 0.0, BONE.HEAD, 1.0, 0.6), // hooked nail
+    // Less FLATTEN than before: a paper-flat lens reads as a tilted twisting ribbon
+    // from the side. A bill with real vertical depth (rounder section) reads as a
+    // solid bar in profile; the deep gular pouch below supplies the pelican bulk.
+    S(new THREE.Vector3(0, 0.41, 1.24), 0.052, 0.048, 0.0, BONE.HEAD, 0.4, 0.0),
+    S(new THREE.Vector3(0, 0.392, 1.46), 0.046, 0.038, 0.0, BONE.HEAD, 1.0, 0.0),
+    S(new THREE.Vector3(0, 0.374, 1.7), 0.04, 0.030, 0.0, BONE.HEAD, 1.0, 0.0),
+    S(new THREE.Vector3(0, 0.356, 1.94), 0.028, 0.022, 0.0, BONE.HEAD, 1.0, 0.0),
+    S(new THREE.Vector3(0, 0.330, 2.12), 0.012, 0.016, 0.0, BONE.HEAD, 1.0, 0.0), // hooked nail (droops)
   ];
 }
 
@@ -343,30 +359,35 @@ function sweepBodySkin(stations: Station[]): SweptSkin {
     const t = i / (n - 1);
     tan.push(curve.getTangentAt(clamp01(t)).normalize());
   }
-  // parallel-transport frames
+  // FIXED-UP frames. Parallel transport keeps a frame continuous but lets it
+  // ACCUMULATE ROLL along the path — and the climb up the vertical S-neck rolled the
+  // frame so far that by the bill the flattened/teardrop section was laid on a TILT
+  // and read as a twisting ribbon from the side. Instead we anchor every ring's "up"
+  // to WORLD-UP (projected perpendicular to the tangent), so the frame never drifts:
+  // the body and the bill both resolve to up≈+Y and the flat bill stays level. Where
+  // the tangent goes near-vertical (the neck cresting the fold) world-up degenerates,
+  // so we CARRY the previous ring's up through that short stretch — those rings are
+  // round, hence roll-invariant, so no seam shows.
   const normals: THREE.Vector3[] = [];
   const binormals: THREE.Vector3[] = [];
-  let nrm = new THREE.Vector3(0, 1, 0);
-  if (Math.abs(tan[0].dot(nrm)) > 0.92) nrm.set(1, 0, 0);
-  nrm.sub(tan[0].clone().multiplyScalar(tan[0].dot(nrm))).normalize();
-  const q = new THREE.Quaternion();
-  const axis = new THREE.Vector3();
+  const UPREF = new THREE.Vector3(0, 1, 0);
+  let prevN = new THREE.Vector3(0, 1, 0);
   for (let i = 0; i < n; i++) {
-    if (i > 0) {
-      axis.crossVectors(tan[i - 1], tan[i]);
-      const len = axis.length();
-      if (len > 1e-6) {
-        axis.divideScalar(len);
-        const dot = clamp01((tan[i - 1].dot(tan[i]) + 1) / 2) * 2 - 1;
-        const ang = Math.acos(dot);
-        q.setFromAxisAngle(axis, ang);
-        nrm.applyQuaternion(q);
+    const t = tan[i];
+    let nrm = UPREF.clone().sub(t.clone().multiplyScalar(t.dot(UPREF)));
+    if (nrm.lengthSq() < 0.04) {
+      // tangent ≈ vertical → world-up unusable; carry the previous up, re-orthogonalised.
+      nrm = prevN.clone().sub(t.clone().multiplyScalar(t.dot(prevN)));
+      if (nrm.lengthSq() < 1e-6) {
+        const zr = new THREE.Vector3(0, 0, 1);
+        nrm = zr.sub(t.clone().multiplyScalar(t.dot(zr)));
       }
-      nrm.sub(tan[i].clone().multiplyScalar(tan[i].dot(nrm))).normalize();
     }
-    const bin = new THREE.Vector3().crossVectors(tan[i], nrm).normalize();
+    nrm.normalize();
+    const bin = new THREE.Vector3().crossVectors(t, nrm).normalize();
     normals.push(nrm.clone());
     binormals.push(bin);
+    prevN = nrm;
   }
 
   const verts: number[] = [];
@@ -500,10 +521,14 @@ function buildLowerJawSkin(): { geo: THREE.BufferGeometry } {
   // bill-centre y minus its half-height at each station (head/skull underside ≈0.35),
   // so the lower mandible's top edge tracks the upper bill underside the whole length
   // and the beak stays shut despite the head now riding low.
+  // NOTE: the upper bill is FLATTENED in the sweep (fy = ry·lerp(1,0.5,flatten)), so
+  // its true underside sits HIGHER than centre−ry. These y's are the flatten-aware
+  // undersides; the pouch top edge tracks them so the beak shuts FLUSH — the old
+  // table used full ry and left a visible open-beak slit along the bill.
   const billUnder: { z: number; y: number }[] = [
-    { z: 0.94, y: 0.350 }, { z: 1.06, y: 0.352 }, { z: 1.13, y: 0.360 },
-    { z: 1.24, y: 0.374 }, { z: 1.46, y: 0.366 }, { z: 1.70, y: 0.354 },
-    { z: 1.94, y: 0.340 }, { z: 2.12, y: 0.330 },
+    { z: 0.90, y: 0.345 }, { z: 0.99, y: 0.343 }, { z: 1.07, y: 0.349 }, { z: 1.145, y: 0.358 }, { z: 1.20, y: 0.362 },
+    { z: 1.24, y: 0.362 }, { z: 1.46, y: 0.354 }, { z: 1.70, y: 0.344 },
+    { z: 1.94, y: 0.334 }, { z: 2.12, y: 0.314 },
   ];
   const upperUnderAt = (z: number): number => {
     if (z <= billUnder[0].z) return billUnder[0].y;
@@ -515,11 +540,15 @@ function buildLowerJawSkin(): { geo: THREE.BufferGeometry } {
     }
     return last.y;
   };
-  const OVERLAP = 0.016;     // top edge sits this far ABOVE the bill underside → shut
+  const OVERLAP = 0.02;      // BASELINE weld: the top edge always sits at least this far up
+  //                            INTO the head/bill underside (even at the gape), so the
+  //                            ±0.01 surface noise can never open a slit and detach the jaw.
 
-  const hingeZ = 0.94;       // root starts further back under the skull
+  const hingeZ = 0.98;       // hinge at the GAPE (just under/behind the eye), tucked up
+  //                            under the head front — NOT a fat tube starting behind the
+  //                            head (that hung below as a boxy capped stub).
   const N = 18;
-  const len = 1.18;          // reaches forward to the LONGER bill tip (0.94 + 1.18 = 2.12)
+  const len = 1.14;          // reaches forward to the bill tip (0.98 + 1.14 = 2.12)
   const pts: THREE.Vector3[] = [];
   const profs: { rx: number; ry: number; sag: number; buried: number }[] = [];
   for (let i = 0; i < N; i++) {
@@ -527,25 +556,35 @@ function buildLowerJawSkin(): { geo: THREE.BufferGeometry } {
     const z = hingeZ + t * len;
     // BURIAL: the first ~20% of the trough is sunk up inside the head underside so its
     // surface coincides with the face (no seam). `buried` ramps 1 → 0 by ~20%.
-    const buried = smoothstep(0.2, 0.0, t);
+    // BURIAL ramps fast (done by ~16%) so ONLY the back rings — which sit under the
+    // WIDE round skull — are fattened/lifted to weld the jaw onto the head at the gape;
+    // forward of that (where the bill is narrow) the trough stays slim so it can't bulge
+    // out past the bill. This fixes both "lower jaw detached from head" and the old flap.
+    const buried = smoothstep(0.16, 0.0, t);
     // pouch bulge envelope — fullest about a third along (the swollen gular sac)
     const env = Math.sin(Math.PI * clamp01(t * 0.95));
-    // ring half-heights: fat & buried at root, swelling with the gular sac, slim tip.
-    const ry = 0.016 + 0.045 * env + 0.055 * buried;
+    // ring half-heights: SLIM at the root so it tucks up under the head at the gape (no
+    // hanging boxy stub), swelling with the gular sac mid-length, slim tip.
+    const ry = 0.016 + 0.04 * env + 0.014 * buried;
     // TARGET TOP EDGE: ride the bill underside + overlap; the root rides a touch
     // higher so it sinks up into the head underside. The centre is then targetTop−ry,
     // so cY+ry == the bill underside everywhere → the beak is closed along its length.
-    const targetTop = upperUnderAt(z) + OVERLAP + 0.02 * buried;
+    // Apply the closure OVERLAP only along the BILL; under the head (the throat, z≲1.1)
+    // ramp it to zero so the pouch top sits FLUSH with the head underside instead of
+    // poking up into/through the skull as a grey flap. The beak still shuts forward.
+    const targetTop = upperUnderAt(z) + OVERLAP + 0.02 * smoothstep(1.05, 1.3, z) + 0.006 * buried;
     const y = targetTop - ry;
     pts.push(new THREE.Vector3(0, y, z));
     profs.push({
-      // root is FAT (fills the head underside so it welds in); the body of the
-      // trough swells with the gular sac; the tip narrows to meet the bill.
-      rx: 0.026 + 0.055 * env + 0.05 * buried,
+      // root stays SLIM and tucked up at the gape (top welded to the head underside);
+      // the body of the trough swells with the gular sac; the tip narrows.
+      rx: 0.03 + 0.052 * env + 0.018 * buried,
       ry,
-      // the gular sac hangs the UNDERSIDE down (lower half only) — the swollen pouch —
-      // without ever lowering the top edge away from the bill.
-      sag: 0.7 * env,
+      // THE GULAR SAC — a pelican's signature. The underside hangs FAR below in a
+      // soft catenary (deepest in the front-middle, easing at the throat and tip)
+      // while the top edge stays welded to the upper bill, so the deep pouch reads
+      // without ever cracking the beak open. `sag` multiplies ry on the lower half.
+      sag: 0.6 + 2.0 * env,
       buried,
     });
   }

@@ -11,7 +11,7 @@ midday light, painterly clustered splats, rounded canopies, theatrical wind.
 
 ## Tech
 
-- **Three.js + WebGPURenderer** (falls back to WebGL2), TypeScript, Vite.
+- **Three.js + WebGPURenderer** (WebGPU only), TypeScript, Vite.
 - Terrain = a **solid colour-matched mesh** (you can never see through the
   ground) under a **dense point-splat layer** + wildflower speckle.
 - **Seamless infinite streaming**: chunks are generated on the fly, nearest

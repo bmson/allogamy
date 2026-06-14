@@ -3,3 +3,6 @@ dist
 .DS_Store
 *.local
 .vite
+
+# Claude Code session + agent worktrees
+.claude/

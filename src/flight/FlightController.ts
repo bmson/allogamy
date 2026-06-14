@@ -10,6 +10,8 @@ import { TerrainField } from '../world/TerrainField';
 // mesh is parented to `position`/`orientation` and the camera trails it.
 
 const UP = new THREE.Vector3(0, 1, 0);
+const MAX_ROLL = 0.62;
+const MAX_PITCH = 0.42;
 
 export class FlightController {
   readonly position = new THREE.Vector3(0, 150, 30);
@@ -26,6 +28,9 @@ export class FlightController {
   private camPos = new THREE.Vector3(0, 156, 14);
   private lookTarget = new THREE.Vector3();
   private tmp = new THREE.Vector3();
+  private tmp2 = new THREE.Vector3();
+  /** Eased lateral camera swing — slides out to a profile view through turns. */
+  private swing = 0;
 
   constructor(camera: THREE.PerspectiveCamera, source: ControlSource, field: TerrainField) {
     this.camera = camera;
@@ -41,8 +46,6 @@ export class FlightController {
   update(dt: number) {
     // Continuous flight intent from whatever source is active (keyboard or phone gyro).
     const c = this.source.read();
-    const MAX_ROLL = 0.62;
-    const MAX_PITCH = 0.42;
     const targetRoll = -c.roll * MAX_ROLL; // bank INTO the turn (the tilt was inverted)
     const targetPitch = c.pitch * MAX_PITCH;
 
@@ -81,14 +84,35 @@ export class FlightController {
   }
 
   private updateCamera(dt: number) {
-    // Trail behind and above, smoothed for a floating feel. Raised and aimed
-    // closer so the bird is framed from behind-and-above (wingspan reads).
+    // Horizontal basis relative to the bird's heading: straight behind, and the
+    // side (perpendicular) it can swing out along.
     const back = this.tmp.set(-this.forward.x, 0, -this.forward.z).normalize();
-    this.camPos.copy(this.position).addScaledVector(back, 16).addScaledVector(UP, 9);
+    const side = this.tmp2.set(-this.forward.z, 0, this.forward.x).normalize();
+
+    // Through a banked turn the camera swings OUT to one side so we catch the
+    // bird's profile and the full wingspread; level out and it falls back to the
+    // behind-and-above chase. `swing` eases on its own (slower than the bank)
+    // so the camera has real weight — it settles into the side view and drifts
+    // back rather than snapping with the controls. Normalised to ~[-1, 1].
+    const swingTarget = this.roll / MAX_ROLL;
+    this.swing += (swingTarget - this.swing) * (1 - Math.exp(-dt * 2.0));
+    const s = this.swing;
+    const a = Math.min(1, Math.abs(s));
+
+    const lateral = s * 18; // how far around to the side
+    const backDist = 16 - a * 7; // pull in as we come around so the bird stays framed
+    const rise = 9 - a * 2.5; // drop a touch for a flatter, more dramatic angle
+
+    this.camPos.copy(this.position)
+      .addScaledVector(back, backDist)
+      .addScaledVector(side, lateral)
+      .addScaledVector(UP, rise);
     const k = 1 - Math.exp(-dt * 3.6);
     this.camera.position.lerp(this.camPos, k);
 
-    this.lookTarget.copy(this.position).addScaledVector(this.forward, 18);
+    // Aim closer to the bird as we swing aside so it stays centred in frame.
+    const ahead = 18 - a * 11;
+    this.lookTarget.copy(this.position).addScaledVector(this.forward, ahead);
     this.camera.up.copy(UP);
     this.camera.lookAt(this.lookTarget);
     // Lean the camera into the bank for that swooping feel.

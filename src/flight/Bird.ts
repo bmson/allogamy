@@ -542,7 +542,7 @@ export class Bird implements Updatable {
     this.bTorso.rotation.x = 0.03 * flex * amp        // wingbeat tuck/extend
       + 0.08 * mPitch                                 // mild chest tip with climb/dive
       + 0.02 * Math.sin(idle * 0.7);                  // idle drift
-    this.bTorso.rotation.y = 0.04 * mRoll + 0.04 * lead; // mild waist yaw into the turn
+    this.bTorso.rotation.y = -0.04 * mRoll - 0.04 * lead; // mild waist yaw INTO the turn (sign: +roll turns toward −X)
     this.bTorso.rotation.z = -0.03 * mRoll;            // subtle waist roll-with-bank
 
     // --- NECK FLEX: the neck is no longer static. A second-order spring drives an
@@ -603,7 +603,7 @@ export class Bird implements Updatable {
       // curve, never a kink.
       const sway = 0.045 * Math.sin(idle * 0.55 - lag * 0.7) * (0.5 + 0.5 * f)
         + 0.02 * Math.sin(ph * 0.5 - lag) * amp;       // a faint wing-driven side weave
-      n[i].rotation.y = sway + 0.11 * mRoll * f + 0.05 * lead * f;
+      n[i].rotation.y = sway - 0.11 * mRoll * f - 0.05 * lead * f; // sweep the front half INTO the turn (+roll → −X)
       // axial roll: the neck progressively counter-rolls toward level (each bone
       // unwinds a little of the body's bank) so by the head the gaze is near
       // horizontal — the supple neck does the levelling, not a snap at the skull.
@@ -625,9 +625,10 @@ export class Bird implements Updatable {
       - 0.018 * Math.sin(ph - 1.9) * amp + 0.018 * Math.sin(idle * 0.9); // alive, not rigid
     // The head LEADS the wheel: it turns to point along the new heading (the bird
     // looks where it is going), and the neck already swept it most of the way there,
-    // so this finishes the gaze pointing into the turn. (+roll → heading +X → nose
-    // toward +X, which is +head.y.) Driven by the eased gaze so it leads smoothly.
-    this.bHead.rotation.y = 0.16 * gYaw + 0.025 * Math.sin(idle * 0.55);
+    // so this finishes the gaze pointing into the turn. SIGN: in the flight model
+    // `yaw -= roll·k`, so +roll wheels the heading toward −X; leading into the turn is
+    // therefore a NEGATIVE local head.y. (The old +gYaw aimed the head OUT of the turn.)
+    this.bHead.rotation.y = -0.16 * gYaw + 0.025 * Math.sin(idle * 0.55);
     // GAZE LEVELLING in roll: while the body rolls into the wheel, the head counter-
     // rolls so the eyes stay near horizontal, locked on the world — the steady,
     // soulful eye-line of a living animal carving a turn, even as it looks ahead.

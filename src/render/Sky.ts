@@ -1,40 +1,21 @@
 import * as THREE from 'three/webgpu';
 import { palette } from './palette';
-import { makeGlowTexture, makeCloudTexture } from './textures';
+import { makeGlowTexture } from './textures';
 import { SUN_DIR } from '../config';
+import { makeVolumetricClouds, VolumetricClouds } from '../world/volumetricClouds';
 
-// A gradient sky dome + sun glow + a drift of soft cumulus. The whole rig
-// follows the camera so the horizon is effectively infinite.
+// A gradient sky dome + sun glow + a raymarched VOLUMETRIC cloud layer. The whole
+// rig follows the camera so the horizon is effectively infinite. The clouds are a
+// fbm density field raymarched on a camera-centred dome (see volumetricClouds.ts),
+// sitting between the gradient dome and the sun glow so the horizon/fog reads
+// beneath them and the sun still pools its light in front.
 
 const sunDir = new THREE.Vector3(...SUN_DIR).normalize();
-
-// Per-cloud state. `home` is the rest position on the camera-centred dome; the
-// live position is derived from `home` + drift + a slow bob/breath so the rig
-// is allocation-free every frame. `warm` precomputes how near the sun each
-// cloud sails (0 = far, 1 = right in front of the sun) for a happy golden kiss.
-interface Cloud {
-  sprite: THREE.Sprite;
-  mat: THREE.SpriteMaterial;
-  speed: number; // horizontal drift (world units / s)
-  home: THREE.Vector3; // rest position relative to the camera
-  baseW: number; // sprite width at rest
-  baseH: number; // sprite height at rest
-  bobAmp: number; // vertical bob amplitude
-  bobPhase: number; // bob/breath phase offset
-  breath: number; // opacity+scale breathing depth
-  baseOpacity: number; // opacity at rest
-  warm: number; // 0..1 proximity to the sun azimuth (golden tint)
-}
-
-// Horizontal span the clouds recycle across. A cloud that drifts past +SPAN/2
-// wraps seamlessly back to -SPAN/2, so the procession never visibly pops.
-const CLOUD_SPAN = 4200;
-const CLOUD_COUNT = 26;
 
 export class Sky {
   private camera: THREE.Camera;
   private group = new THREE.Group();
-  private clouds: Cloud[] = [];
+  private clouds: VolumetricClouds;
   private glow: THREE.Sprite;
 
   constructor(scene: THREE.Scene, camera: THREE.Camera) {
@@ -145,67 +126,24 @@ export class Sky {
     this.group.add(glow);
     this.glow = glow;
 
-    // --- Cumulus drift -------------------------------------------------------
-    // A loose procession of soft cumulus on a camera-centred ring. Each cloud
-    // carries its own drift speed, bob and breathing phase, and a precomputed
-    // warmth from sailing near the sun azimuth (golden-rimmed clouds — the
-    // happy-day cue). Per-cloud state is fixed here; update() is allocation-free.
-    const cloudTexes = [makeCloudTexture(3), makeCloudTexture(11), makeCloudTexture(29)];
-    // Sun azimuth (XZ heading toward the sun) — clouds crossing this glow warm.
-    const sunAzX = sunDir.x;
-    const sunAzZ = sunDir.z;
-    const sunAzLen = Math.hypot(sunAzX, sunAzZ) || 1;
-    for (let i = 0; i < CLOUD_COUNT; i++) {
-      const tex = cloudTexes[i % cloudTexes.length];
-      const baseOpacity = 0.84 + (i % 5) * 0.03; // 0.84..0.96
-      const mat = new THREE.SpriteMaterial({
-        map: tex,
-        color: palette.cloud.clone(), // cloned: warmed per-cloud below
-        transparent: true,
-        opacity: baseOpacity,
-        depthWrite: false,
-        fog: false,
-      });
-
-      const ang = (i / CLOUD_COUNT) * Math.PI * 2 + (i % 5) * 0.31;
-      const rad = 900 + (i % 7) * 150;
-      const hgt = 360 + (i % 4) * 120;
-      const home = new THREE.Vector3(Math.cos(ang) * rad, hgt, Math.sin(ang) * rad);
-
-      // Warmth: how aligned this cloud's bearing is with the sun azimuth (0..1).
-      const bx = Math.cos(ang), bz = Math.sin(ang);
-      const align = THREE.MathUtils.clamp((bx * sunAzX + bz * sunAzZ) / sunAzLen, 0, 1);
-      const warm = align * align; // tighten so only near-sun clouds catch gold
-      // Bake the steady golden rim straight into the sprite tint; the additive
-      // sun glow behind also licks their edges, so this stays subtle.
-      mat.color.copy(palette.cloud).lerp(palette.sun, warm * 0.35);
-
-      const s = new THREE.Sprite(mat);
-      const baseW = (380 + (i % 6) * 110) * 1.6;
-      const baseH = 380 + (i % 6) * 110;
-      s.scale.set(baseW, baseH, 1);
-
-      this.clouds.push({
-        sprite: s,
-        mat,
-        speed: 4 + (i % 5) * 1.5,
-        home,
-        baseW,
-        baseH,
-        bobAmp: 8 + (i % 4) * 6,
-        bobPhase: i * 1.37,
-        breath: 0.04 + (i % 3) * 0.015,
-        baseOpacity,
-        warm,
-      });
-      this.group.add(s);
-    }
+    // --- Live clouds ---------------------------------------------------------
+    // A field of soft-cumulus BILLBOARDS the bird flies through — a faithful port
+    // of the reference CodePen's layered cloud-sprite technique (see
+    // volumetricClouds.ts). Unlike the gradient dome and sun glow, this layer lives
+    // in WORLD space (added to the scene, NOT the camera-following group): the puffs
+    // sit at real world positions and recycle around the bird, so flying through
+    // them gives true parallax. Rendered at order -1 (over the gradient dome at -2,
+    // under the solid world at 0) so terrain and the bird occlude the clouds.
+    this.clouds = makeVolumetricClouds();
+    scene.add(this.clouds.mesh);
 
     scene.add(this.group);
   }
 
-  update(_dt: number, t: number) {
-    // Sky follows the camera; clouds drift slowly across it.
+  update(dt: number, t: number) {
+    // Sky follows the camera; the cloud dome rides with it so the layer is
+    // effectively infinite (the drift happens inside the noise field, not by
+    // moving the dome — see volumetricClouds.ts).
     this.group.position.copy(this.camera.position);
 
     // Sun glow breathes — a slow, shallow swell so the light feels alive, not a
@@ -214,21 +152,7 @@ export class Sky {
     this.glow.scale.setScalar(560 + pulse * 24);
     (this.glow.material as THREE.SpriteMaterial).opacity = 0.92 + pulse * 0.06;
 
-    for (const c of this.clouds) {
-      // Seamless recycle: drift along X and wrap within a band centred on the
-      // home X, so a cloud leaving one side re-enters the other with no pop.
-      const span = CLOUD_SPAN;
-      const phase = (c.home.x + t * c.speed + span * 0.5) % span;
-      const x = (phase < 0 ? phase + span : phase) - span * 0.5;
-
-      // Slow vertical bob + a paired scale/opacity breath, each on its own phase
-      // so the sky never pulses in unison — a living painting, not a metronome.
-      const bob = Math.sin(t * 0.12 + c.bobPhase);
-      const breathe = Math.sin(t * 0.09 + c.bobPhase * 0.7);
-      c.sprite.position.set(x, c.home.y + bob * c.bobAmp, c.home.z);
-      const k = 1 + breathe * c.breath;
-      c.sprite.scale.set(c.baseW * k, c.baseH * k, 1);
-      c.mat.opacity = c.baseOpacity + breathe * 0.05;
-    }
+    // Advance the cloud field: drift on the wind + recycle puffs around the bird.
+    this.clouds.update(dt, t, this.camera.position);
   }
 }
