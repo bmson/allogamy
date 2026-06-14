@@ -121,14 +121,10 @@ export class Bird implements Updatable {
     // identity. World-space normals keep the shading (and hatch density) pinned to the
     // scene sun as the bird banks and flaps. (See birdMaterial.makeBirdMaterial.)
     const bodyMat = makeBirdMaterial();
-    // the wing membranes read in the SAME grey-graphite as the body so the buried
-    // wing root melts into the flank — no stark cool/dark slate flap clipping into a
-    // warmer body. We keep only a hair more contour (so the long flight feathers
-    // still read as separate inked planes) and a slightly finer hatch for the long
-    // feather chords, but drop the cool slate emissiveTint that set the wings apart.
-    const wingMat = makeBirdMaterial({
-      hatchScale: 6.2, contour: 0.95,
-    });
+    // Wings share the BODY material exactly — same hatch + contour + tint — so the
+    // wing reads continuous with the flank with no extra inked seam. (The user wanted
+    // the wing↔body contrast gone; the prior "a hair more contour" reintroduced it.)
+    const wingMat = bodyMat;
     // legs are small — a finer, lighter pencil so the thin tarsi don't go solid black.
     const legMat = makeBirdMaterial({ hatchScale: 5.0, inkStrength: 0.8, contour: 0.7 });
 
