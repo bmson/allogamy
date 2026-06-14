@@ -239,7 +239,13 @@ export class Chunk {
         field.mixColor(x, z, y, slope, path, rock, cc);
         const sheen = THREE.MathUtils.clamp(0.86 + 0.22 * ndotl, 0.74, 1.12);
         cc.multiplyScalar(sheen);
-        if (rnd() < 0.1) cc.lerp(palette.waterShallow, 0.3 + rnd() * 0.3); // glints
+        // Sparkle dabs scattered on the calm surface: most water dabs stay their
+        // baked tone, but a scatter catch the SKY (pale-blue reflection glints) and a
+        // rarer few catch the SUN (warm white sparkle) — so the brook glitters with
+        // reflected light like a living surface rather than a flat painted ribbon.
+        const g = rnd();
+        if (g < 0.16) cc.lerp(palette.skyHorizon, 0.35 + rnd() * 0.4); // sky-reflection glint
+        else if (g < 0.23) cc.lerp(palette.sun, 0.3 + rnd() * 0.3);    // warm sun sparkle
         scale = 1.0 + rnd() * 0.9; // broad, flat surface dabs
         yoff = 0.12 + rnd() * 0.28; // sits low on the water, in the sunk channel
         wind = 0; // calm/still — water must not wave
