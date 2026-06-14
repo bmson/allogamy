@@ -108,7 +108,7 @@ function fbm(x: number, y: number, z: number): number {
 // shoulder fairing and the wing geometry agree on the exact emergence point.
 // Pulled INTO the flank (low x, on the upper flank) so the wing root is buried in
 // the body rather than perched beside it.
-export const WING_ATTACH = new THREE.Vector3(0.045, 0.18, 0.21);
+export const WING_ATTACH = new THREE.Vector3(0.045, 0.18, 0.42);
 
 // ---------------------------------------------------------------------------
 // SHOULDER FAIRING — swell the body surface laterally where each wing emerges, so
@@ -862,11 +862,20 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
       const z = le - trail * v;
       const camberShape = Math.sin(Math.PI * v);
       const thFactor = (1 - v) * 0.7 + 0.3;
+      // FLESHY INNER ARM — the single biggest "stop reading as a sheet" lever. The
+      // inner ~half of the span is built as a ROUNDED 3D LIMB, not a thin membrane,
+      // so it reads as an arm growing out of the shoulder. (A thin sheet sits at a
+      // grazing angle to the eye across its WHOLE area, so the NPR fresnel contour
+      // inks its entire perimeter → a cut-out card; a fat rounded limb only inks its
+      // true silhouette, exactly like the body does.) Rounded across the chord
+      // (fattest at mid-chord via camberShape) and faded out by ~half-span, where the
+      // wing thins to the genuine flight-feather blade past the wrist.
+      const armBulk = (0.04 + 0.055 * camberShape) * smoothstep(0.5, 0.0, t);
       // THICKEN the buried root: a fat wad of flesh (not a thin wafer) so even where
       // the root surface sits near the body surface there is solid overlap and no
       // thin membrane edge can show against the flank. Tapers out to the thin flight
       // feathers by the time the wing emerges.
-      const th = thick * thFactor * (0.4 + 0.6 * camberShape) + rootFair2 * 0.05;
+      const th = thick * thFactor * (0.4 + 0.6 * camberShape) + rootFair2 * 0.05 + armBulk;
       const camber = 0.55 * thick * camberShape * (1 - 0.3 * t);
       let y = camber + droopBase - 0.02 * v * t;
       // fair the root DOWN into the flank so the membrane sinks deep into the haunch
