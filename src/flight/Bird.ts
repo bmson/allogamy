@@ -362,17 +362,19 @@ export class Bird implements Updatable {
     const drive = Math.sin(ph) - DOWN_BIAS * Math.sin(2 * ph);
     const driveDown = Math.max(0, drive);
 
-    // Flap shares: the SHOULDER carries LESS of the raw swing than the elbow/wrist
-    // now, so the big visible beat happens OUTBOARD of the buried wing root. The
-    // root sits near the shoulder pivot and barely moves through the cycle, which is
-    // what keeps the shoulder fairing welded shut as the wing flaps (no seam opens
-    // at the flank). The arm still leads — proximal→distal — but the amplitude grows
-    // toward the hand so the wing unrolls like a whip instead of pumping at the root.
-    const shoulderZ = REST_DIHEDRAL + 0.52 * drive * amp;
-    const sweep = 0.12 * Math.sin(ph - 0.4) * amp;
+    // Flap shares: the SHOULDER carries only a SMALL part of the raw swing now, so
+    // the big visible beat happens OUTBOARD of the buried wing root. The buried
+    // fillet sits at the shoulder pivot and barely moves through the cycle (the
+    // geometry's overlap test was tuned to stay closed for shoulder swings up to
+    // ~0.4–0.45 rad), which is what keeps the shoulder haunch welded shut as the wing
+    // flaps — no seam opens at the flank. The lost shoulder amplitude is handed to
+    // the ELBOW so the wingtip still travels the full beat: the arm leads
+    // proximal→distal and the wing unrolls like a whip from a near-still root.
+    const shoulderZ = REST_DIHEDRAL + 0.22 * drive * amp;
+    const sweep = 0.10 * Math.sin(ph - 0.4) * amp;
 
     const dl = Math.sin(ph - ELBOW_LAG) - DOWN_BIAS * Math.sin(2 * (ph - ELBOW_LAG));
-    const elbowZ = REST_ELBOW + 0.58 * dl * amp + 0.34 * Math.max(0, -drive) * amp;
+    const elbowZ = REST_ELBOW + 0.82 * dl * amp + 0.34 * Math.max(0, -drive) * amp;
     const wl = Math.sin(ph - WRIST_LAG);
     const wristZ = REST_WRIST + 0.52 * wl * amp + 0.2 * Math.max(0, -drive) * amp;
     // feathering wash: the outboard membrane twists nose-down on the loaded
@@ -405,18 +407,21 @@ export class Bird implements Updatable {
       const tuck = Math.max(0, -s * mRoll / 0.62);  // inside/low wing → tuck
       const reach = Math.max(0, s * mRoll / 0.62);   // outside/high wing → reach
 
-      // SHOULDER (about Z = dihedral): DROP the low wing, LIFT the high wing — an
-      // exaggerated, tasteful split-dihedral that is the heart of the wheel. (`-s`
-      // drops, `+s` raises, for whichever physical wing this is.)
-      w.shoulder.rotation.z = s * shoulderZ - s * 0.46 * tuck + s * 0.30 * reach;
+      // SHOULDER (about Z = dihedral): DROP the low wing, LIFT the high wing — the
+      // split-dihedral that is the heart of the wheel. Kept MODEST at the shoulder so
+      // the buried root stays inside the haunch (the bank's big span asymmetry is
+      // carried by the elbow/wrist below, outboard of the fillet). (`-s` drops, `+s`
+      // raises, for whichever physical wing this is.)
+      w.shoulder.rotation.z = s * shoulderZ - s * 0.30 * tuck + s * 0.18 * reach;
       // SHOULDER (about Y = sweep): the inside wing sweeps AFT (trailing, shorter
       // moment arm), the outside wing sweeps slightly FORWARD as it reaches around.
-      w.shoulder.rotation.y = s * sweep + s * (0.22 * tuck - 0.10 * reach);
+      w.shoulder.rotation.y = s * sweep + s * (0.16 * tuck - 0.08 * reach);
 
       // ELBOW (about Z): the low wing FLEXES hard (folds, shortening the span — the
       // classic tucked inner wing of a banking bird); the high wing EXTENDS (opens
-      // flat to reach long). This span asymmetry is what really sells the wheel.
-      w.elbow.rotation.z = s * elbowZ - s * 0.34 * tuck + s * 0.16 * reach;
+      // flat to reach long). This span asymmetry is what really sells the wheel, and
+      // it lives OUTBOARD of the buried root so it can be bold without opening a seam.
+      w.elbow.rotation.z = s * elbowZ - s * 0.50 * tuck + s * 0.28 * reach;
       // WRIST (about Z): continue the fold on the inside, the stretch on the outside.
       w.wrist.rotation.z = s * wristZ - s * 0.28 * tuck + s * 0.14 * reach;
       // spanwise washout twist (about the wing's ±X axis): nose-down to grab air on

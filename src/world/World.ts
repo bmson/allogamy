@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { TerrainField } from './TerrainField';
 import { Chunk } from './Chunk';
 import { makeSplatMaterial } from '../render/SplatMaterial';
+import { makeWaterMaterial } from './water';
 import { createTreePrototypes, createBushPrototypes, TreeProto } from './tree';
 import { CHUNK_SIZE, LOAD_RADIUS, UNLOAD_RADIUS, WORLD_SEED } from '../config';
 
@@ -85,20 +86,14 @@ export class World {
       metalness: 0,
       flatShading: true,
     });
-    // Calm water: vertex-coloured, LIT, but DIFFUSE (not a mirror). With no env map a
-    // low-roughness surface reflected nothing and read as near-black; so we raise the
-    // roughness and add a gentle sky-blue emissive lift so the water always reads as
-    // bright water catching the sky, never a dark hole. Slightly transparent so the
-    // muddy shore feathers through at the rim.
-    this.waterMat = new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      roughness: 0.55,
-      metalness: 0.0,
-      emissive: new THREE.Color('#cfe8f8'), // sky-blue lift (cheap stand-in for a sky reflection)
-      emissiveIntensity: 0.35,
-      transparent: true,
-      opacity: 0.9,
-    });
+    // Calm water: vertex-coloured, LIT, but DIFFUSE (not a mirror) — AND now gently
+    // MOVING. A TSL node material drives two time-driven cues off the surface's
+    // world position (the chunk group is at the origin, so the mesh's local position
+    // IS its world position → ripples stay coherent across chunk seams): a low-
+    // amplitude travelling ripple in the vertex positions, and a slow scrolling sky
+    // sheen lifted into the emissive so light glints drift along the stream. Kept
+    // calm and painterly. See makeWaterMaterial in water.ts.
+    this.waterMat = makeWaterMaterial();
     this.protos = createTreePrototypes(WORLD_SEED);
     this.bushProtos = createBushPrototypes(WORLD_SEED);
   }

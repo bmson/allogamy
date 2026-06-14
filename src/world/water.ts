@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { positionLocal, time, sin, vec3, float } from 'three/tsl';
 import { palette } from '../render/palette';
 import { CHUNK_SIZE, SUN_DIR } from '../config';
 import { TerrainField } from './TerrainField';
@@ -33,8 +34,76 @@ const _sky = new THREE.Color();
 
 // Tiny, calm surface undulation baked into the lit fan: just enough that the
 // low-roughness specular wanders softly across the pool instead of being one
-// frozen flat highlight. Pure geometry — no per-frame work, the surface is still.
+// frozen flat highlight. This baked relief is now ALSO animated at runtime by the
+// node material below (the travelling ripple rides on top of it).
 const RIPPLE = 0.05; // metres of vertical relief on the inner rings (very subtle)
+
+// ---- live-water animation knobs (speed / amplitude) ----
+// Tuned for a CALM stream/tarn: travelling waves of a few cm, drifting slowly in
+// one direction like a gentle current, plus a slow sky-sheen scroll. Bump these to
+// make the water busier; drop them toward 0 to freeze it.
+const WAVE_AMP = 0.06; // metres of vertical ripple (world scale) — very subtle
+const WAVE_FREQ = 0.08; // spatial frequency (1/m) — long, lazy swells, not chop
+const WAVE_SPEED = 0.55; // how fast the ripple front drifts (the "current")
+const SHEEN_FREQ = 0.045; // spatial frequency of the moving sky-glint band (1/m)
+const SHEEN_SPEED = 0.35; // how fast the glint band slides along the surface
+const SHEEN_LIFT = 0.5; // peak extra sky-emissive added where a glint passes
+
+/**
+ * Calm, MOVING water surface material (TSL node material). Shared by every water
+ * mesh, so the animation is driven entirely on the GPU from the `time` node — no
+ * per-frame CPU work, no per-chunk uniforms. Two cues sell the motion:
+ *
+ *  1) A low-amplitude travelling RIPPLE in `positionNode`: two summed sines of the
+ *     surface's WORLD x/z (the chunk group sits at the origin, so the mesh's local
+ *     position equals its world position) advanced by `time`. The waves drift in
+ *     one direction like a current and stay phase-coherent across chunk seams.
+ *
+ *  2) A scrolling sky SHEEN folded into `emissiveNode`: a slow sine band sweeping
+ *     across the surface in world space lifts the existing sky-blue emissive where
+ *     it passes, so highlights travel along the stream. This is the strongest "it's
+ *     moving" cue and reads even where the mesh is nearly flat / low-poly.
+ *
+ * Everything else is preserved: vertex colours (the baked waterDeep→shallow→edge
+ * tones), the gentle sky-blue emissive lift, transparency, and the diffuse (non-
+ * mirror) lit look — so it still matches the soft world, just alive.
+ */
+export function makeWaterMaterial(): THREE.MeshStandardNodeMaterial {
+  const mat = new THREE.MeshStandardNodeMaterial();
+  mat.vertexColors = true;
+  mat.roughness = 0.55;
+  mat.metalness = 0.0;
+  mat.transparent = true;
+  mat.opacity = 0.9;
+
+  // World position of this surface vertex (group is at origin → local == world).
+  const p = positionLocal;
+  const wx = p.x;
+  const wz = p.z;
+
+  // --- (1) travelling ripple: two summed sines drifting +X (half on Z) like a
+  // current. Different freqs/phases on each axis so the swells interfere into a
+  // soft, non-repetitive undulation rather than a marching grid of rollers.
+  const t = time;
+  const w1 = sin(wx.mul(WAVE_FREQ).add(wz.mul(WAVE_FREQ * 0.6)).add(t.mul(WAVE_SPEED)));
+  const w2 = sin(wx.mul(WAVE_FREQ * 1.7).sub(wz.mul(WAVE_FREQ * 0.9)).add(t.mul(WAVE_SPEED * 0.7)));
+  const lift = w1.add(w2.mul(0.5)).mul(WAVE_AMP);
+  // Displace only Y; keep x/z so the surface never shears horizontally.
+  mat.positionNode = vec3(p.x, p.y.add(lift), p.z);
+
+  // --- (2) scrolling sky-sheen: a slow diagonal band sweeping across the surface.
+  // Where it crests, lift the sky-blue emissive so a soft glint travels downstream.
+  // Raise to a power so the band reads as a discrete travelling highlight, not a
+  // whole-surface pulse — quiet, not busy.
+  const band = sin(wx.mul(SHEEN_FREQ).add(wz.mul(SHEEN_FREQ * 0.7)).add(t.mul(SHEEN_SPEED)))
+    .mul(0.5).add(0.5); // 0..1
+  const glint = band.mul(band).mul(band); // sharpen → a moving crest, mostly dark
+  // Base gentle sky lift (the old constant emissive) + the travelling glint on top.
+  const sky = vec3(palette.skyHorizon.r, palette.skyHorizon.g, palette.skyHorizon.b);
+  mat.emissiveNode = sky.mul(float(0.32).add(glint.mul(SHEEN_LIFT)));
+
+  return mat;
+}
 
 export interface WaterResult {
   /** Vertex-coloured fan for the still water surface (lit, low-roughness). */
@@ -129,12 +198,17 @@ export function buildWater(
     ringX[s] = bestX + ca * r; ringZ[s] = bestZ + sa * r;
   }
 
-  // ---- surface fan: centre + a mid ring + the shore ring, vertex-coloured ----
-  // Two rings give a smooth deep→shallow gradient AND let the lit material catch a
-  // softly varied calm sheen (the inner verts sit a hair higher with a baked, still
-  // ripple, so the specular wanders gently instead of being a single flat slab).
-  // Layout: [0] centre, [1..SEG] mid ring, [SEG+1..2*SEG] shore ring.
-  const vcount = 1 + SEG * 2;
+  // ---- surface fan: centre + an inner ring + a mid ring + the shore ring ----
+  // THREE rings (was two) give a smooth deep→shallow gradient AND enough radial
+  // samples that the animated travelling ripple (driven in the node material from
+  // world position) reads as a smooth heave across the pool rather than faceting
+  // over a couple of huge triangles. The extra ring is a handful of verts — water
+  // is rare and small, so it stays cheap. Each ring still carries the baked still
+  // relief; the runtime ripple rides on top of it.
+  // Layout: [0] centre, [1..SEG] inner ring, [SEG+1..2*SEG] mid ring,
+  //         [2*SEG+1..3*SEG] shore ring.
+  const RING_F = [0.32, 0.64]; // inner / mid ring radii as a fraction of the spoke
+  const vcount = 1 + SEG * 3;
   const pos = new Float32Array(vcount * 3);
   const col = new Float32Array(vcount * 3);
 
@@ -155,18 +229,21 @@ export function buildWater(
     // rather than a clean lobe — still, fixed in place, never animated.
     const glint = sheen * sheen * (0.55 + 0.45 * Math.sin(s * 0.9 + phase));
 
-    // --- mid ring (≈55% out): the body deepening to the centre ---
-    const mIdx = (s + 1) * 3;
-    const mx = bestX + ca * r * 0.55, mz = bestZ + sa * r * 0.55;
-    pos[mIdx] = mx;
-    pos[mIdx + 1] = level + RIPPLE * Math.sin(s * 1.7 + phase) * 0.6;
-    pos[mIdx + 2] = mz;
-    _col.copy(palette.waterDeep).lerp(palette.waterShallow, 0.28 + sheen * 0.18);
-    if (glint > 0.5) _col.lerp(palette.waterShallow, (glint - 0.5) * 0.5);
-    col[mIdx] = _col.r; col[mIdx + 1] = _col.g; col[mIdx + 2] = _col.b;
+    // --- inner & mid rings: the body deepening to the centre ---
+    for (let k = 0; k < 2; k++) {
+      const f = RING_F[k];
+      const idx = (1 + k * SEG + s) * 3;
+      pos[idx] = bestX + ca * r * f;
+      pos[idx + 1] = level + RIPPLE * Math.sin(s * (1.7 + k * 0.6) + phase) * (0.6 - k * 0.18);
+      pos[idx + 2] = bestZ + sa * r * f;
+      // deepen→shallow with radius; the mid ring is a touch paler than the inner.
+      _col.copy(palette.waterDeep).lerp(palette.waterShallow, 0.2 + f * 0.22 + sheen * 0.18);
+      if (glint > 0.5) _col.lerp(palette.waterShallow, (glint - 0.5) * 0.5);
+      col[idx] = _col.r; col[idx + 1] = _col.g; col[idx + 2] = _col.b;
+    }
 
     // --- shore ring (the marched waterline): pale sun-skimmed shallow + sky rim ---
-    const sIdx = (SEG + 1 + s) * 3;
+    const sIdx = (1 + 2 * SEG + s) * 3;
     pos[sIdx] = ringX[s];
     pos[sIdx + 1] = level + RIPPLE * Math.sin(s * 2.3 - phase) * 0.3;
     pos[sIdx + 2] = ringZ[s];
@@ -178,19 +255,23 @@ export function buildWater(
     col[sIdx] = _col.r; col[sIdx + 1] = _col.g; col[sIdx + 2] = _col.b;
   }
 
-  // Index: an inner fan (centre→mid ring) plus a ring band (mid→shore), so the
-  // gradient and lighting interpolate across two bands instead of one long taper.
-  const index = new Uint16Array(SEG * 3 + SEG * 6);
+  // Index: an inner fan (centre→inner ring) plus two ring bands (inner→mid→shore),
+  // so the gradient and the animated ripple interpolate across three bands.
+  const index = new Uint16Array(SEG * 3 + SEG * 6 * 2);
   let ii = 0;
+  const ringStart = (k: number) => 1 + k * SEG; // first vert index of ring k (0=inner)
   for (let s = 0; s < SEG; s++) {
     const sn = (s + 1) % SEG;
-    const mA = s + 1, mB = sn + 1; // mid-ring verts
-    const oA = SEG + 1 + s, oB = SEG + 1 + sn; // shore-ring verts
-    // inner fan triangle
-    index[ii++] = 0; index[ii++] = mA; index[ii++] = mB;
-    // outer band quad (two triangles): mid → shore
-    index[ii++] = mA; index[ii++] = oA; index[ii++] = oB;
-    index[ii++] = mA; index[ii++] = oB; index[ii++] = mB;
+    const iA = ringStart(0) + s, iB = ringStart(0) + sn; // inner-ring verts
+    // inner fan triangle (centre → inner ring)
+    index[ii++] = 0; index[ii++] = iA; index[ii++] = iB;
+    // two ring bands: inner→mid, then mid→shore
+    for (let k = 0; k < 2; k++) {
+      const aA = ringStart(k) + s, aB = ringStart(k) + sn; // band's inner edge
+      const bA = ringStart(k + 1) + s, bB = ringStart(k + 1) + sn; // band's outer edge
+      index[ii++] = aA; index[ii++] = bA; index[ii++] = bB;
+      index[ii++] = aA; index[ii++] = bB; index[ii++] = aB;
+    }
   }
 
   const surfaceGeo = new THREE.BufferGeometry();

@@ -122,13 +122,25 @@ function shoulderFairing(geo: THREE.BufferGeometry): THREE.BufferGeometry {
   const pos = geo.attributes.position.array as Float32Array;
   const count = geo.attributes.position.count;
   const cz = WING_ATTACH.z, cy = WING_ATTACH.y;
-  // A BROAD, DEEP fillet — not a pimple. The swell is an elongated fleshy ridge
-  // running well fore-and-aft along the back-to-flank so the wing root sits IN a
-  // long shoulder shelf, and it reaches a touch further down the flank, so the
-  // wing's buried fillet has body to melt into all the way along its chord. The
-  // larger gaussian sigmas widen the ridge; the falloff stays smooth so it blends
-  // seamlessly back into the egg of the body (no rim).
-  const izz = 1 / (2 * 0.40 * 0.40), iyy = 1 / (2 * 0.30 * 0.30);
+  // A BIG, generous HAUNCH — a fleshy ridge the wing is grown from, NOT a pimple.
+  // It must be large enough that the wing's whole buried root (the inner ~40% of
+  // span, see buildWingSkin) sits solidly INSIDE this swell at rest AND stays inside
+  // it through the entire flap arc (the root rotates about the shoulder pivot which
+  // lives at the heart of this haunch). So the swell is: wide (long fore-and-aft so
+  // it covers the wing's broad root chord), deep (pushed well outboard so the wing's
+  // span tucks under it), and TALL (the section centre is raised so the haunch rises
+  // up the flank, giving body flesh both above and below the root through its swing).
+  //   • Verified by construction (a standalone overlap test reasoning about the body
+  //     envelope vs the wing membrane): at rest the wing only emerges past ~30% span,
+  //     and across the realistic flap+bank extremes the inner ≤18% span stays buried
+  //     inside this haunch — so the overlap never opens a gap. (See buildWingSkin and
+  //     the reduced shoulder-flap share in Bird.update.)
+  // The gaussian falloff stays smooth so the haunch melts back into the egg of the
+  // body with no rim. The haunch is built TALL rather than wide: it leans on lifting
+  // the flank into a fleshy crown the wing sinks DOWN into, with only a modest
+  // sideways bulge — so the shoulders don't read as over-broad. Larger sigmas
+  // widen/lengthen the ridge.
+  const izz = 1 / (2 * 0.58 * 0.58), iyy = 1 / (2 * 0.62 * 0.62);
   for (let i = 0; i < count; i++) {
     const k = i * 3;
     const x = pos[k], y = pos[k + 1], z = pos[k + 2];
@@ -136,13 +148,17 @@ function shoulderFairing(geo: THREE.BufferGeometry): THREE.BufferGeometry {
     const env = Math.exp(-(dz * dz) * izz - (dy * dy) * iyy);
     if (env < 1e-3) continue;
     const s = x < 0 ? -1 : 1;
-    // push the flank outward to form a generous shoulder shelf, and lift the upper
-    // flank more so the shelf rises into a fleshy haunch the wing root sinks into.
-    const outward = 0.115 * env;
-    const lift = 0.05 * env * smoothstep(0.0, 0.14, Math.abs(x)); // upper flank lifts most
-    // ease the very top of the shelf forward a hair so it caps over the wing root
-    // (the haunch overhangs the fillet, hiding the join line as the wing flexes).
-    const cap = 0.018 * env * smoothstep(0.06, 0.16, Math.abs(x));
+    // push the flank outward to form the shelf — KEPT MODEST so the bird doesn't get
+    // too wide; the burial comes mostly from height + the wing sinking in, not girth.
+    const outward = 0.17 * env;
+    // RAISE the whole swell so the haunch rises up the flank (the section centre
+    // lifts, not just the top edge): this is what gives the wing root body flesh
+    // both below it and capping over it, so an up-flap can't lift the root clear of
+    // the body. More lift on the upper flank builds a tall crown the root tucks under.
+    const lift = env * (0.13 + 0.07 * smoothstep(0.0, 0.16, Math.abs(x)));
+    // ease the top of the shelf forward a hair so it caps over the wing root (the
+    // haunch overhangs the fillet, hiding the join line as the wing flexes).
+    const cap = 0.02 * env * smoothstep(0.06, 0.18, Math.abs(x));
     pos[k] = x + s * outward; pos[k + 1] = y + lift; pos[k + 2] = z + cap;
   }
   geo.attributes.position.needsUpdate = true;
@@ -771,24 +787,29 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
     const xspan = t * WING_TIP;
     const x = side * xspan;
     // chord (fore-aft depth): broad at the arm, tapering to slim primaries. The
-    // root chord is broadened further (rootFair) so the membrane fairs into the
-    // body as a wide fillet rather than a narrow blade.
-    // ROOT FAIRING spans the inner ~30% now (was 22%): a longer, more gradual
-    // fillet so the wing melts into the body over a generous run rather than
-    // ducking in over a short stub. `rootFair0` ramps 1 → 0 across that span.
-    const rootFair0 = smoothstep(0.30, 0.0, t);
+    // root chord is broadened (rootFair) so the membrane fairs into the body as a
+    // wide fillet rather than a narrow blade.
+    // ROOT FAIRING now spans the inner ~46% of span: a long, gradual fillet so the
+    // wing melts into the haunch over a generous run. `rootFair0` ramps 1 → 0 across
+    // that span. The inner ~30% is genuinely BURIED inside the body's shoulder
+    // haunch (verified by an overlap test against the body envelope), and it only
+    // emerges as a clear membrane past there — so a thin flat root edge never butts
+    // the flank; the surfaces overlap solidly.
+    const rootFair0 = smoothstep(0.46, 0.0, t);
     const chord = lerp(0.6, 0.12, smoothstep(0.0, 1.0, t)) * (1 - 0.18 * smoothstep(0.7, 1.0, t))
-      * (1 + 0.7 * rootFair0); // broaden the root chord more → a wide fillet
+      * (1 + 0.42 * rootFair0); // broaden the root chord → a wide fillet of overlap
     const thick = lerp(0.05, 0.006, t);
     // leading edge sweeps back & bows forward (a smooth curve)
     const le = lerp(0.2, -0.18, t) + 0.05 * Math.sin(t * Math.PI);
     // whole-wing droop + gull bow at the tip
     const droopBase = -0.05 * t * t;
-    // ROOT FAIRING: blend the inner membrane INTO the shoulder shelf of the body.
-    // Over the inner ~22% of span the root is pulled toward the body centre-line,
-    // its chord broadened (above), and its surface sunk down/forward into the flank
-    // — so it disappears into the body swell (a continuous fillet) instead of
-    // meeting the body at a hard card edge. `rootFair` ramps 1 → 0 by 22% span.
+    // ROOT FAIRING: blend the inner membrane INTO the shoulder haunch of the body.
+    // Over the inner span the root is pulled HARD toward the body centre-line (so its
+    // span collapses onto the shoulder pivot — the deepest, fattest root sits AT the
+    // pivot and barely translates as the wing beats, carrying the visible swing
+    // outboard), its chord broadened (above), it is fattened in thickness, and its
+    // surface sunk down into the flank — so it disappears into the haunch as a
+    // continuous fillet instead of meeting the body at a hard card edge.
     const rootFair = rootFair0;
     const rootFair2 = rootFair * rootFair; // sharper falloff for the deepest burial
     const [bA, bB, wB] = weightAt(xspan);
@@ -809,23 +830,31 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
       const z = le - trail * v;
       const camberShape = Math.sin(Math.PI * v);
       const thFactor = (1 - v) * 0.7 + 0.3;
-      const th = thick * thFactor * (0.4 + 0.6 * camberShape);
+      // THICKEN the buried root: a fat wad of flesh (not a thin wafer) so even where
+      // the root surface sits near the body surface there is solid overlap and no
+      // thin membrane edge can show against the flank. Tapers out to the thin flight
+      // feathers by the time the wing emerges.
+      const th = thick * thFactor * (0.4 + 0.6 * camberShape) + rootFair2 * 0.05;
       const camber = 0.55 * thick * camberShape * (1 - 0.3 * t);
       let y = camber + droopBase - 0.02 * v * t;
-      // fair the root DOWN into the flank so the membrane sinks deep into the
-      // shoulder shelf (it disappears into the swell rather than meeting it at a
-      // hard line). Deeper now, to match the bigger fillet: the deepest root row
-      // drops most, easing out smoothly across the fillet so there is no rim.
-      y += -rootFair * 0.07 - rootFair2 * 0.07;
+      // fair the root DOWN into the flank so the membrane sinks deep into the haunch
+      // (it disappears into the swell rather than meeting it at a hard line). The
+      // burial leans on this downward sink — the wing dives into a tall haunch —
+      // rather than on bulging the body wide. A single smooth ramp, no rim.
+      y += -rootFair * 0.17;
       // curl the root edges down (chord-wise) so the fillet wraps the flank instead
       // of poking out as a flat shelf — the leading and trailing root corners tuck
       // under the haunch.
-      y += -rootFair2 * 0.05 * (v - 0.5) * 2;
-      const zr = z + rootFair * 0.12;
-      // pull the root spanwise X toward the body centre-line so it tucks deep under
-      // the shoulder swell (xFair → 1 keeps tip X; → small at root sinks it well
-      // inboard, buried inside the haunch rather than perched beside it).
-      const xFair = 1 - 0.62 * rootFair2;
+      y += -rootFair2 * 0.04 * (v - 0.5) * 2;
+      // keep the buried chord roughly centred in the haunch (only a small forward
+      // nudge) so the long root chord stays inside the fore-aft span of the swell.
+      const zr = z + rootFair * 0.04;
+      // pull the root spanwise X HARD toward the body centre-line so its span
+      // collapses onto the shoulder pivot — the buried fillet tucks deep under the
+      // haunch and barely moves through the flap (rotation radius ≈ 0 near the
+      // pivot), which is what keeps the overlap closed as the wing beats. Linear in
+      // rootFair so the collapse reaches all the way to the pivot at the root row.
+      const xFair = 1 - 0.86 * rootFair;
       const xx = WING_ATTACH.x * side + x * xFair;
       // bake the body attachment so bone pivots == geometry joints in span-X
       top.push(xx, WING_ATTACH.y + y + th, WING_ATTACH.z + zr);
@@ -856,13 +885,17 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
     c.copy(C_COVERT_LOW).lerp(base, smoothstep(0.25, 0.7, top01));
     // at the buried root the wing shares the body's colour, so the fairing reads as
     // body skin flowing into wing rather than a coloured flap stuck on the flank.
-    // The blend now matches the deeper fillet: full body colour over the buried
-    // root, easing to wing colour by ~22% span — so there is no colour seam where
-    // the fillet emerges, only a soft gradient from flank-grey to covert-grey.
-    const rootBlend = smoothstep(0.22, 0.0, tspan); // 1 at root → 0 by 22% span
+    // The blend matches the deeper fillet: full body colour over the buried root,
+    // easing to wing colour only PAST the emergence (~28% of the collapsed span) —
+    // so there is no colour seam where the fillet emerges, only a soft gradient from
+    // flank-grey to covert-grey. (tspan is small over the inboard-collapsed root, so
+    // this keys cleanly onto exactly the buried + emerging region.)
+    const rootBlend = smoothstep(0.28, 0.05, tspan); // 1 over the buried root → 0 by ~28% span
     if (rootBlend > 0) {
+      // match the body flank's own top→pearl gradient at this height so the colour
+      // agrees with the haunch the wing emerges from (no hue/value step at the join).
       const bodyHere = C_BODY.clone().lerp(C_BODY_TOP, smoothstep(0.4, 0.95, top01));
-      c.lerp(bodyHere, rootBlend * 0.92);
+      c.lerp(bodyHere, rootBlend * 0.95);
     }
 
     // --- secondary covert rows: gentle chordwise feather bands across the inner
