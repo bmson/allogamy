@@ -160,7 +160,11 @@ export function buildPostProcessing(
     considerQuad(c, w, s, sw, lc, lw, ls, lsw);
     considerQuad(c, e, s, se, lc, le, ls, lse);
 
-    const col = mix(raw, bestMean, float(0.45)).toVar();
+    // Lean a touch harder on the Kuwahara mean (0.45 → 0.52): the reference painting
+    // groups its greens into confident flat MASSES with soft interiors and crisp mass
+    // boundaries — more flatten reads as deliberate brushwork, less as photographic
+    // micro-detail. Held below ~0.6 so foliage/flower detail doesn't smear away.
+    const col = mix(raw, bestMean, float(0.52)).toVar();
 
     // ---- 1.5) OIL-PAINT BLEED + IMPASTO GRADIENT (shared) -------------------
     // Luminance central differences from the SHARED grid (no extra taps) drive
@@ -197,10 +201,10 @@ export function buildPostProcessing(
     col.addAssign(vec3(1.0, 0.97, 0.9).mul(spec).mul(lum(col)).mul(0.2).mul(k));
 
     // ---- 4) MONET GRADE ----
-    col.assign(col.sub(0.5).mul(1.1).add(0.5)); // gentle contrast — enough depth without crushing darks to black
+    col.assign(col.sub(0.5).mul(1.14).add(0.5)); // a touch more contrast for the reference's sunlit depth (still no crushed blacks)
     const l1 = lum(col);
     col.assign(mix(vec3(l1), col, uChroma)); // +chroma
-    col.addAssign(vec3(0.05, 0.025, -0.015).mul(l1)); // warm lights
+    col.addAssign(vec3(0.065, 0.03, -0.02).mul(l1)); // warm sunlight in the lights (reference reads warm/golden)
     col.addAssign(vec3(-0.01, 0.0, 0.035).mul(float(1.0).sub(l1))); // cool shadows
     const vg = screenUV.sub(0.5);
     col.mulAssign(float(1.0).sub(dot(vg, vg).mul(uVignette))); // vignette

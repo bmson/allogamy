@@ -66,6 +66,21 @@ const REST_DIHEDRAL = 0.18; // shoulders held in a soft soaring V
 const REST_ELBOW = -0.12;
 const REST_WRIST = -0.1;
 
+// --- PELICAN NECK RETRACTION (rest fold) ---
+// THE signature pelican-in-flight trait: a pelican does NOT fly with its neck
+// extended upright like a goose/swan — it draws the head BACK onto the shoulders,
+// the long neck folded into a tight S, and carries the heavy bill forward roughly
+// level. The body geometry sweeps a tall-ish S-neck (head perched high & forward);
+// these per-bone REST pitches (radians, shoulder→head) FOLD that S back into the
+// pelican posture: the two lower bones lean the neck back, the two upper bones curl
+// the head down over the top so it settles low and drawn-in near the shoulders.
+// The head's gaze code already cancels most of the pitch it inherits down the neck
+// (see `inheritedPitch` below), so folding the neck this way automatically pitches
+// the head UP to keep the bill aimed level/forward — exactly the folded-neck,
+// bill-forward silhouette. Sign: negative rotation.x lifts/reaches the neck UP,
+// positive folds it DOWN. Tunable — dial these from a screenshot.
+const REST_NECK_X = [-0.18, -0.22, 0.34, 0.36];
+
 const SCALE = 3.0;
 
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
@@ -572,7 +587,8 @@ export class Bird implements Updatable {
       // flex, both lagged down the chain. Negative X tips this bone's run upward, so
       // a positive `neckFlex` extends/lifts the neck (reaches up into the climb).
       const wave = 0.05 * Math.sin(ph - lag) * amp + 0.03 * Math.sin(idle * 0.6 - lag * 0.5);
-      n[i].rotation.x = wave * (0.7 + 0.3 * f)
+      n[i].rotation.x = REST_NECK_X[i]    // pelican fold: draw the head back onto the shoulders
+        + wave * (0.7 + 0.3 * f)
         - 0.16 * neckFlex * ease        // spring-driven up-down flex, rippling outward
         - 0.05 * mPitch * f;            // counter-arc vs the chest tip (smooth C through climb)
       neckPitchSum += n[i].rotation.x;
