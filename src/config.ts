@@ -38,8 +38,8 @@ export const WIND_STRENGTH = 1.7;
 // crisp, saturated ~300 m foreground that recedes into bright sky. Open the view
 // out by raising LOAD_RADIUS (+ the disc round-out) AND these together, or pull
 // them via the panel's fog sliders. (The splat aerial wash + scene.fog read these.)
-export const FOG_NEAR = 300;
-export const FOG_FAR = 480;
+export const FOG_NEAR = 460;
+export const FOG_FAR = 720;
 
 // Camera. Narrower fov → compressed, painting-like framing. Matches 6.html's 52°.
 export const CAM_FOV = 52;

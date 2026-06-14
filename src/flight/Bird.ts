@@ -62,7 +62,9 @@ const DAMP_C = 15.6;
 // dihedral at the shoulder (the confident soaring V) but the elbow/wrist held closer
 // to straight (less fold) so the wing reads broad and extended at rest rather than
 // half-tucked — a powerful glider, not a bird mid-recovery.
-const REST_DIHEDRAL = 0.18; // shoulders held in a soft soaring V
+const REST_DIHEDRAL = 0.26; // shoulders held in a soft soaring V (lifted from 0.18:
+//   at rest the spread was reading dead-flat / faintly drooping like thin planks; a
+//   clearer upward V gives the held, graceful soaring-pelican line — not a limp sheet)
 const REST_ELBOW = -0.12;
 const REST_WRIST = -0.1;
 

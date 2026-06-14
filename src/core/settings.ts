@@ -20,7 +20,7 @@ import { FOG_NEAR, FOG_FAR, WIND_STRENGTH } from '../config';
 // Defaults below are the values dialed in live via the tuning panel and exported.
 export const uGlow = uniform(0.61); // halation glow strength
 export const uImpasto = uniform(1.5); // canvas relief / texture (impasto)
-export const uChroma = uniform(0.97); // grade saturation
+export const uChroma = uniform(1.04); // grade saturation (lifted toward the reference's vivid greens)
 export const uVignette = uniform(0.84); // corner darkening amount
 export const uBleed = uniform(0.0); // oil-paint smear strength (off)
 export const uPaperTex = uniform(0.18); // procedural canvas/paper noise grain over the whole frame
