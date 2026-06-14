@@ -41,7 +41,7 @@ export const WIND_STRENGTH = 1.7;
 export const FOG_NEAR = 460;
 export const FOG_FAR = 720;
 
-// Camera. Narrower fov → compressed, painting-like framing. Matches 6.html's 52°.
+// Camera. Narrower fov → compressed, painting-like framing.
 export const CAM_FOV = 52;
 export const CAM_FAR = 5000;
 

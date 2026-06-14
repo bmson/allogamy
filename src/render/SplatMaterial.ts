@@ -31,8 +31,8 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   // rim BEFORE it writes depth, so dabs don't punch hard depth holes around their
   // edges. Trade-off accepted: stamps read a touch more defined than the ultra-soft
   // version — correctness + framerate now outweigh the last bit of blend.
-  // 6.html uses depthWrite:false + a per-frame sort; our no-sort pipeline can't afford
-  // that, so this is the cheap, correct equivalent.
+  // (A per-frame depth sort would let us keep depthWrite:false; our no-sort pipeline
+  // can't afford that, so this alphaTest+depthWrite combo is the cheap, correct equivalent.)
   mat.transparent = true;
   mat.depthWrite = true;
   mat.depthTest = true;
@@ -92,28 +92,28 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   const viewPos = vec4(centerView.xyz.add(vec3(corner, 0.0)), 1.0);
   mat.vertexNode = cameraProjectionMatrix.mul(viewPos);
 
-  // Bristly DRY-MEDIA / PENCIL dab, ported from 6.html's splatFrag (~748-765). The
-  // quad uv is already rotated by aAngle and stretched along its length in the vertex
-  // stage, so the local coordinate `r = uv*2-1` is exactly the reference's rotated,
-  // aspect-corrected `r` — r.y runs along the stroke's LENGTH. d = dot(r,r) is the
-  // squared radius; the stamp is a soft gaussian feather rather than a hard disc.
+  // Bristly DRY-MEDIA / PENCIL dab. The quad uv is already rotated by aAngle and
+  // stretched along its length in the vertex stage, so the local coordinate
+  // `r = uv*2-1` is the rotated, aspect-corrected stroke frame — r.y runs along the
+  // stroke's LENGTH. d = dot(r,r) is the squared radius; the stamp is a soft gaussian
+  // feather rather than a hard disc.
   const r = uv().sub(0.5).mul(2.0); // -1..1 in the stroke's own frame
   const seed = fract(sin(aCenter.x.mul(12.9898).add(aCenter.z.mul(78.233))).mul(43758.5453));
   // Dry-media banding: hash bands ACROSS the stroke length (floor(r.y*6)) per stamp
   // (floor(seed*91)) and modulate the squared radius — this is what makes a mark read
-  // as a bristly pencil/chalk stroke, not a clean blob. Exactly 6.html lines 756-757.
+  // as a bristly pencil/chalk stroke, not a clean blob.
   const bristle = fract(
     sin(r.y.mul(6.0).floor().mul(127.1).add(seed.mul(91.0).floor().mul(311.7))).mul(43758.5453),
   );
   const d = r.dot(r).mul(float(1.0).add(bristle.sub(0.5).mul(0.2)));
 
-  // Fuller gaussian feather (6.html: smoothstep(1.0, 0.5, d) * 0.94). d>1 is the
-  // implicit discard; smoothstep from 1→0.5 melts the edge so dense strokes blend
-  // like drawn marks. alphaTest culls the empty rim (d≳1) so cores write clean depth.
+  // Fuller gaussian feather (smoothstep(1.0, 0.5, d) * 0.94). d>1 is the implicit
+  // discard; smoothstep from 1→0.5 melts the edge so dense strokes blend like drawn
+  // marks. alphaTest culls the empty rim (d≳1) so cores write clean depth.
   mat.opacityNode = smoothstep(float(1.0), float(0.5), d).mul(0.94);
 
-  // Aerial perspective, two-step like 6.html (lines 768-771): first desaturate toward
-  // grey (luminance), then wash toward the pale blue-violet aerial colour, so distant
+  // Aerial perspective, two-step: first desaturate toward grey (luminance), then wash
+  // toward the pale blue-violet aerial colour, so distant
   // strokes dissolve into luminous airy paper rather than a hard edge or grey soup.
   // The aerial colour matches palette.fog (= the linear value vec3(0.72,0.75,0.89)).
   // This depends ONLY on per-instance quantities (aColor and depth — depth is the

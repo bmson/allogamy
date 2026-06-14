@@ -16,11 +16,7 @@ export interface Updatable {
 // while cutting fragment work to ~56% of the 2× budget (1.5²/2²) — a big, free win.
 const MAX_PIXEL_RATIO = 1.5;
 
-/**
- * WebGPU only. The WebGL2 fallback has been removed for now — this piece targets
- * the WebGPU backend exclusively, so `init()` will throw on browsers (or headless
- * setups) without it rather than silently degrading.
- */
+/** WebGPU-only renderer. `init()` throws on browsers without WebGPU. */
 async function createRenderer(): Promise<THREE.WebGPURenderer> {
   const r = new THREE.WebGPURenderer({
     antialias: true,

@@ -11,65 +11,19 @@ import {
   max,
   pow,
   cos,
-  abs,
   reflect,
   normalize,
   screenUV,
   screenSize,
-  fract,
-  sin,
-  floor,
 } from 'three/tsl';
 import {
-  uGlow, uImpasto, uChroma, uVignette, uBleed, uPaperTex, uGrainScale, uWeave,
+  uGlow, uImpasto, uChroma, uVignette, uBleed,
 } from '../core/settings';
 
-// --- procedural value-noise → fbm, for the whole-frame canvas/paper grain ------
-// A hashed value-noise on a pixel lattice, smoothstep-interpolated, summed over a
-// couple of octaves. Sampled in FRAGMENT space so it reads as a fixed canvas
-// texture the painting sits on (it doesn't swim with the camera).
-const hash2 = /*#__PURE__*/ Fn(([p]: [any]) =>
-  fract(sin(dot(p, vec2(127.1, 311.7))).mul(43758.5453)));
-
-const vnoise = /*#__PURE__*/ Fn(([p]: [any]) => {
-  const i = floor(p);
-  const f = fract(p);
-  const u: any = f.mul(f).mul(float(3.0).sub(f.mul(2.0))); // smoothstep weights
-  const a = hash2(i);
-  const b = hash2(i.add(vec2(1.0, 0.0)));
-  const c = hash2(i.add(vec2(0.0, 1.0)));
-  const d = hash2(i.add(vec2(1.0, 1.0)));
-  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-});
-
-// 3-octave fbm built on the value-noise above. The classic lacunarity≈2 /
-// gain≈0.5 sum gives a "canvas tooth" that has structure at several scales at
-// once (fine fibre, medium mottle, coarse blotch) instead of a single buzzy
-// frequency — far closer to real primed-canvas grain. Returns ~[0,1].
-const fbm = /*#__PURE__*/ Fn(([p]: [any]) => {
-  const sum = float(0.0).toVar();
-  const amp = float(0.5).toVar();
-  const q = p.toVar();
-  // Unrolled (TSL has no runtime loops in this idiom). Each octave doubles the
-  // frequency and halves the amplitude; the small rotate-ish offset per octave
-  // breaks axis-aligned tiling so the tooth never looks like a grid.
-  sum.addAssign(vnoise(q).mul(amp));
-  q.assign(q.mul(2.02).add(vec2(11.7, 4.3)));
-  amp.assign(amp.mul(0.5));
-  sum.addAssign(vnoise(q).mul(amp));
-  q.assign(q.mul(2.03).add(vec2(3.1, 17.9)));
-  amp.assign(amp.mul(0.5));
-  sum.addAssign(vnoise(q).mul(amp));
-  // Normalise by the amplitude sum (0.5+0.25+0.125 = 0.875) back to ~[0,1].
-  return sum.mul(1.0 / 0.875);
-});
-
-// Faithful TSL port of 6.html's single post pass `paintFrag` (lines ~805-872).
 // One full-screen pass that turns the rendered frame into a "painting": a
-// Kuwahara flatten for painterly cohesion, a halation glow, an impasto relief
-// lit against a canvas grain (the paper feel), and finally a no-blacks Monet
-// grade. Runs in linear space; PostProcessing applies the sRGB encode on
-// output, so we do NOT tone-map or gamma-encode here.
+// Kuwahara flatten for painterly cohesion, a halation glow, an impasto relief,
+// and finally a no-blacks Monet grade. Runs in linear space; PostProcessing
+// applies the sRGB encode on output, so we do NOT tone-map or gamma-encode here.
 //
 // The reference's GLSL math is ported node-for-node. The dynamic Kuwahara
 // neighbourhood (4 quadrants x a 2x2 tap) is unrolled in JS so each texture
@@ -208,44 +162,6 @@ export function buildPostProcessing(
     col.addAssign(vec3(-0.01, 0.0, 0.035).mul(float(1.0).sub(l1))); // cool shadows
     const vg = screenUV.sub(0.5);
     col.mulAssign(float(1.0).sub(dot(vg, vg).mul(uVignette))); // vignette
-
-    // ---- 5) CANVAS / PAPER TEXTURE over the whole frame ----------------------
-    // The painting should read as PIGMENT SITTING IN CANVAS WEAVE, not a flat
-    // grain overlay. Three ingredients, all sampled in FRAGMENT space so the
-    // texture is fixed to the "canvas" and doesn't swim with the camera:
-    //
-    //   (a) fbm tooth   — 3-octave value-noise: fine fibre + medium mottle +
-    //                     coarse blotch in one term, the body of the canvas grain.
-    //   (b) canvas weave — two crossed sinusoidal ridges (warp + weft) give the
-    //                     regular directional tooth of woven canvas. Built from
-    //                     |cos| ridges so the threads read as raised lines.
-    //   (c) paper fibre  — a faint high-frequency mottle on top, the random fleck
-    //                     of pressed paper fibre.
-    //
-    // `uGrainScale` rescales the whole frequency family; `uWeave` crossfades
-    // between pure mottle (0) and pronounced woven tooth (1). All centred on 0 so
-    // the texture both darkens and lightens (pigment pools in the valleys, thins
-    // on the threads). Overall strength is the live `paperTex` knob; 0 = clean.
-    const gs = uGrainScale;
-    const tooth = fbm(fc.mul(float(0.045).mul(gs)).add(vec2(7.0))).sub(0.5); // ~[-0.5,0.5]
-    // Woven warp/weft: |cos| ridges crossed at 90°, centred on 0. The two axes use
-    // slightly different frequencies so the weave never beats into a perfect grid.
-    const warp = abs(cos(fc.x.mul(float(0.85).mul(gs)))).sub(0.5);
-    const weft = abs(cos(fc.y.mul(float(0.92).mul(gs)))).sub(0.5);
-    const weave = warp.add(weft).mul(0.5).mul(uWeave);
-    // High-freq paper fleck, kept low so it textures without buzzing.
-    const fibre = vnoise(fc.mul(float(1.7).mul(gs)).add(vec2(31.0))).sub(0.5).mul(0.35);
-
-    const canvas = tooth.mul(0.7).add(weave).add(fibre); // ~centred on 0
-
-    // Luminance-aware: let the tooth bite in the MIDTONES (where wet pigment sits
-    // deepest in the weave) and clean up toward the highlights (thin paint / lit
-    // thread tops show the canvas least). A simple parabola peaking at mid-grey.
-    const lT = lum(col);
-    const toothMask = float(1.0).sub(abs(lT.sub(0.5)).mul(2.0)).max(0.0); // 1 at mid, 0 at extremes
-    const bite = mix(float(0.55), float(1.0), toothMask); // never fully off in darks/lights
-
-    col.mulAssign(float(1.0).add(canvas.mul(uPaperTex).mul(bite)));
 
     return vec4(col, 1.0);
   });

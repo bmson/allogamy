@@ -51,7 +51,7 @@ export interface VolumetricCloudsOpts {
 }
 
 const DEFAULTS: Required<VolumetricCloudsOpts> = {
-  count: 650,
+  count: 320,
   radius: 1700,
   depth: 3000,
   baseY: 300,        // band centre a little above the bird's start (y~158) so the
@@ -92,7 +92,7 @@ export function makeVolumetricClouds(opts: VolumetricCloudsOpts = {}): Volumetri
   const o = { ...DEFAULTS, ...opts };
   const rng = makeRng(o.seed);
 
-  const uOpacity = uniform(0.4); // lighter, wispier — the dense 0.92 bank read as solid overcast
+  const uOpacity = uniform(0.3); // thin, wispy drifts — not a solid bank
   const uFogNear = uniform(o.fogNear);
   const uFogFar = uniform(o.fogFar);
 
