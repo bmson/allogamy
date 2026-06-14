@@ -110,23 +110,25 @@ export class Bird implements Updatable {
   constructor(scene: THREE.Scene, flight: FlightController) {
     this.flight = flight;
 
-    // HAND-DRAWN NPR "SKETCH" SHADING — not PBR. The body/wing/leg surfaces are drawn
-    // in screen-space GRAPHITE: a soft wrapped n·sun gives a shaded VALUE that drives
-    // drawing density, laid down as PENCIL CROSS-HATCH layers (bare paper in light,
-    // single then crossing then dense hatch as it darkens) with a stipple/halftone-DOT
-    // alternative (a hatch↔dot knob), bounded by a hand-inked fresnel CONTOUR, output
-    // as INK-ON-PAPER tinted to the bird's own palette. So the pelican reads as a
-    // drawing moving through the painted world — "3D drawn, the rest painted." The
-    // baked per-vertex wash is reused only to tint the ink/paper to the creature's
-    // identity. World-space normals keep the shading (and hatch density) pinned to the
-    // scene sun as the bird banks and flaps. (See birdMaterial.makeBirdMaterial.)
+    // FLAT 2D-ILLUSTRATION NPR SHADING — not PBR, and deliberately NOT a lit 3D look.
+    // The smooth n·sun gradient that used to sculpt the body as a solid is QUANTIZED
+    // into a couple of hard FLAT ink-wash fills (light / mid / shadow); the boundary
+    // between them is warped by object-space fbm NOISE so the shadow edge wavers like a
+    // hand-painted line, the fills are mottled by the same noise into a dry watercolour
+    // wash, and the whole shape is bounded by a wobbly hand-inked CONTOUR. So the
+    // pelican reads as a FLAT hand-drawn illustration moving through the painted world,
+    // not a 3D model. The baked per-vertex wash is reused only to tint the fills to the
+    // creature's identity (grey body / charcoal primaries / warm bill). World-space
+    // normals keep the (quantized) light flipping light↔shadow as the bird banks and
+    // the sun tracks across it. (See birdMaterial.makeBirdMaterial.)
     const bodyMat = makeBirdMaterial();
-    // Wings share the BODY material exactly — same hatch + contour + tint — so the
-    // wing reads continuous with the flank with no extra inked seam. (The user wanted
-    // the wing↔body contrast gone; the prior "a hair more contour" reintroduced it.)
+    // Wings share the BODY material exactly — same flat fills + wash + contour + tint —
+    // so the wing reads continuous with the flank with no extra inked seam. (The user
+    // wanted the wing↔body contrast gone.)
     const wingMat = bodyMat;
-    // legs are small — a finer, lighter pencil so the thin tarsi don't go solid black.
-    const legMat = makeBirdMaterial({ hatchScale: 5.0, inkStrength: 0.8, contour: 0.7 });
+    // legs are small & thin — a finer wash and a lighter outline so the slim tarsi keep
+    // a clean drawn edge instead of clotting into solid ink.
+    const legMat = makeBirdMaterial({ noiseScale: 9.0, outline: 0.85, hatch: 0.0 });
 
     this.root.add(this.bob);
 

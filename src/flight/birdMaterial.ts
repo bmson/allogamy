@@ -1,120 +1,126 @@
 import * as THREE from 'three/webgpu';
 import {
   Fn, vec2, vec3, float, mix, clamp, max, min, dot, smoothstep, fract, sin, floor,
-  oneMinus, pow, abs, uniform, vertexColor, normalWorld,
-  positionViewDirection, screenCoordinate, length,
+  oneMinus, abs, uniform, vertexColor, normalWorld, positionLocal,
+  positionViewDirection, screenCoordinate, length, step,
 } from 'three/tsl';
 import { SUN_DIR } from '../config';
 
 // ===========================================================================
-// THE PELICAN'S SKIN — a HAND-DRAWN, non-photorealistic "sketch" shader.
+// THE PELICAN'S SKIN — a FLAT, HAND-DRAWN 2D ILLUSTRATION shader.
 //
-// The world is a soft painterly wash of dabs run through a Kuwahara + glow +
-// impasto-on-paper post pass: it reads as something DRAWN. The bird used to be
-// shaded as a soft toon figure — it sat in the painting, but it read as a
-// *painted* solid, not a *drawn* one. The brief: make the pelican read as
-// PENCIL-DRAWN / DOT-DRAWN — a cool NPR sketch that looks like a graphite (or
-// stipple) drawing moving through the painting, so the eye reads it as "the
-// drawn creature in the painted world."
+// The previous skin inked a screen-space pencil hatch over a flattened albedo —
+// but it still drove the marks from a SMOOTH wrapped n·sun ramp, so the body kept
+// reading as a 3D model: a continuous light→dark gradient sculpts form like a lit
+// solid, and the eye can't help but see volume. The brief: make the bird read as a
+// FLAT, hand-DRAWN 2D illustration moving through the painted world — NOT a lit 3D
+// model. The single biggest "less-3D" lever is killing that smooth gradient.
 //
-// So we throw out the soft toon look and INK THE BIRD ON PAPER, in screen space.
+// HOW THIS KILLS THE 3D READ — three cooperating moves:
 //
-// CRUCIAL: the drawing — not the baked 3D model — defines the form. The baked
-// per-vertex wash carries its OWN 3D shading (top/under gradients, baked AO, a
-// `sunlit` term, feather shading). If we composited the hatch OVER that, the bird
-// would read as a 3D-lit model with hatching laid on top — two shading systems
-// fighting. So the baked colour is used for IDENTITY ONLY: we keep its HUE/chroma
-// (grey plumage vs warm bill) but FLATTEN its value to a constant mid, erasing the
-// baked gradients/AO. ALL light & shadow — both the hatch DENSITY and the paper's
-// own value — come from the LIVE wrapped n·sun alone. The result is a flat-shaded
-// DRAWING: paper + ink hatch + inked contour describe the form, no "3D + hatch".
+//   1. FLATTEN / QUANTIZE THE LIGHT. The smooth n·sun is SNAPPED to two (→three)
+//      hard FLAT regions — a light fill and a shadow fill (with an optional mid) —
+//      via a `flatten` knob (0 = the old smooth ramp, 1 = fully posterised flat
+//      fills). A continuous gradient is what makes a surface read as a curved 3D
+//      solid; replacing it with a couple of flat ink-wash fills makes the body read
+//      as filled SHAPES on paper. This is the heart of the effect.
 //
-//   • SHADED VALUE — a soft wrapped/half-Lambert n·sun gives a 0..1 lightness per
-//     fragment (bright facing the sun, dark in shade). This LIVE VALUE is the ONLY
-//     shading: it drives how much drawing (graphite/ink) we lay down AND the value
-//     of the paper itself: bright = bare lit paper, dark = dense marks.
-//   • PENCIL CROSS-HATCHING — screen-space hatch lines at several orientations.
-//     Bright areas are bare paper; as the value darkens we reveal one hatch layer,
-//     then a second crossing layer, then a third/fourth — classic build-up of a
-//     graphite drawing. The lines carry a little noise so edges read as soft
-//     irregular graphite, never a clean printed grid.
-//   • STIPPLE / HALFTONE DOTS — an alternative mark language: a screen-space dot
-//     grid whose dot coverage GROWS as the value darkens (pointillist / dotted
-//     shading), echoing the world's dab/splat language. A `hatchDot` knob blends
-//     hatch (0) ↔ dots (1) so the user can pick "pencil" or "dotted."
-//   • INK CONTOUR — a dark hand-inked edge-line from the grazing-angle fresnel
-//     (and steep silhouette), drawn ON TOP so the form is bounded like a sketch.
-//   • INK-ON-PAPER TINT — the marks are INK toned from the bird's identity (a warm
-//     charcoal/heron tone derived from its own albedo) laid on a light PAPER tone
-//     (also tinted by the albedo + scene light), so it still reads as the SAME
-//     creature (heron-grey body, warm bill) — just drawn rather than rendered.
+//   2. NOISE-WARP THE TERMINATOR + MOTTLE THE FILLS. The boundary between the light
+//      and shadow fills is displaced by procedural fbm noise, so the shadow edge is
+//      a WAVERING hand-painted line rather than a clean 3D terminator that traces
+//      the geometry. The flat fills are then mottled by a second, finer fbm wash so
+//      each fill reads as a dry-ink / watercolour wash with grain — never a smooth
+//      shaded plastic. The noise is sampled in OBJECT space so the wash STICKS to
+//      the surface (it doesn't swim as the bird banks), reading as paint laid on the
+//      bird, with a faint screen-space paper grain layered on for a drawn-on feel.
 //
-// We don't re-apply Kuwahara/grade here — the full-frame post pass already grades
-// everything; it will sit the bird's marks on the same paper as the world. We use
-// world-space normals so the shading (and thus the drawing density) tracks the sun
-// as the bird banks, flaps and wheels. The screen-space marks are a CONSTANT
-// on-screen size and shimmer slightly as the bird moves — that "redrawn each frame"
-// flicker is exactly the hand-drawn feel we want.
+//   3. STRONG WOBBLY INKED OUTLINE. A hand-inked contour from the grazing-angle
+//      fresnel bounds the silhouette + interior folds, its threshold wobbled by
+//      noise so the line breathes like a pen line, not a vector-clean rim. A flat
+//      fill only reads as an intentional DRAWING once it's bounded by an inked edge;
+//      without it the flat shape looks like an untextured blob.
+//
+// The existing screen-space pencil HATCH is folded back in as ONE restrained layer,
+// gated to the shadow fill only, to give the dark side a little drawn tooth — but it
+// is no longer the primary look and is dialled low by default.
+//
+// We keep the bird's palette IDENTITY (pearl-grey body, charcoal primaries, warm
+// ochre bill) as FLAT ink/wash tones: the baked per-vertex wash is read for HUE only
+// (its value is normalised away) so the fills carry the creature's colour without
+// re-introducing the bake's own 3D shading. World-space normals drive the (now
+// quantized) light so the flat fills still flip light↔shadow as the bird banks and
+// the sun tracks across it — it reads as a drawing that's AWARE of the light, not a
+// frozen sticker. The full-frame post pass grades the scene; we don't re-grade here.
 // ===========================================================================
 
 // World sun direction (toward the sun), matching the scene + the geometry's baked
-// `sunlit` term so the shaded value agrees with the world's light.
+// `sunlit` term so the flat fills agree with the world's light.
 const SUN = new THREE.Vector3(...SUN_DIR).normalize();
 
-// Ink / paper identity tones. The bird is a pearl-grey pelican with a charcoal
-// crown/primaries and a warm ochre bill (see birdGeometry palette). We draw it in
-// graphite: a near-white warm PAPER and a cool charcoal INK. Both get nudged toward
-// the bird's own albedo per-fragment so the drawing keeps the creature's identity
-// (grey plumage stays grey-graphite; the warm bill inks in a warmer sepia).
-const PAPER = new THREE.Color('#f4f2ec'); // warm off-white drawing paper
-const INK = new THREE.Color('#2b2b33'); // cool graphite/charcoal ink
-const KEY_WARM = new THREE.Color('#fff0cf'); // scene's warm golden key (warms lit paper)
+// Ink / paper / wash identity tones. The bird is a pearl-grey pelican with a
+// charcoal crown/primaries and a warm ochre bill (see birdGeometry palette). We
+// render it as flat ink-WASH fills on warm paper: a LIGHT fill (near-white warm
+// paper holding the lit shapes), a SHADOW fill (a cool grey-blue wash), and a dark
+// INK for the wavering contour + the sparse hatch. Each is nudged toward the bird's
+// own albedo per-fragment so the fills keep the creature's identity (grey plumage
+// washes grey, the warm bill washes a warmer sepia).
+const PAPER = new THREE.Color('#f4f2ec');     // warm off-white drawing paper (light fill)
+const SHADOW = new THREE.Color('#9fa9b8');    // cool grey-blue ink-wash (shadow fill)
+const MIDWASH = new THREE.Color('#c9cdd2');   // optional mid fill between light & shadow
+const INK = new THREE.Color('#23232b');       // near-black contour / hatch ink
+const KEY_WARM = new THREE.Color('#fff0cf');  // scene's warm golden key (warms the lit fill)
 
 /**
- * Live-tunable knobs for the hand-drawn bird shading. All safe to nudge from a
- * debug panel; defaults lean toward a clear PENCIL (cross-hatch) look.
+ * Live-tunable knobs for the flat hand-drawn bird. All safe to nudge from a debug
+ * panel; defaults lean STRONGLY toward the flat 2D-illustration look.
  */
 export interface BirdShadeOpts {
-  wrap?: number;       // half-Lambert wrap (0 = Lambert, 1 = fully wrapped/soft)
-  ambient?: number;    // value floor — how light the *darkest* shade stays (less ink)
-  inkStrength?: number; // overall darkness of the drawn marks (0 = faint, 1 = bold)
-  hatchScale?: number;  // hatch line spacing in screen pixels (smaller = finer pencil)
-  hatchSoft?: number;   // line edge softness (0 = crisp, 1 = very soft graphite)
-  hatchJitter?: number; // irregular wobble of the hatch lines (hand-drawn waver)
-  hatchDot?: number;    // 0 = pure cross-hatch (pencil), 1 = pure stipple/halftone dots
-  dotScale?: number;    // stipple/halftone cell size in screen pixels
-  contour?: number;     // inked silhouette/interior contour strength
-  paperWarmth?: number; // how much the lit paper warms toward the scene's golden key
-  tintIdentity?: number; // how strongly ink+paper take on the bird's own albedo hue
+  flatten?: number;     // 0 = smooth ramp (old 3D look) → 1 = fully posterised flat fills
+  bands?: number;       // # of flat regions when flat: 2 = light/shadow, 3 = + a mid wash
+  wrap?: number;        // half-Lambert wrap of the underlying n·sun (soft falloff)
+  shadeLift?: number;   // value floor — how light the shadow fill stays (less ink)
+  noiseScale?: number;  // object-space wash/mottle frequency (bigger = finer grain)
+  noiseStrength?: number; // how strongly the fbm wash mottles the flat fills
+  edgeWobble?: number;  // how far noise warps the light↔shadow terminator (wavering edge)
+  outline?: number;     // inked silhouette/interior contour strength
+  outlineWobble?: number; // noise wobble of the inked edge (hand-drawn, not vector-clean)
+  hatch?: number;       // sparse pencil hatch in the shadow fill (0 = none, 1 = strong)
+  hatchScale?: number;  // hatch line spacing in screen pixels
+  paperWarmth?: number; // how much the lit fill warms toward the scene's golden key
+  tintIdentity?: number; // how strongly the fills take on the bird's own albedo hue
   emissiveTint?: THREE.Color; // optional cool cast (wings keep their slate identity)
 }
 
 const DEFAULTS: Required<Omit<BirdShadeOpts, 'emissiveTint'>> = {
-  wrap: 0.6,            // soft illustrated falloff so the shaded side is hatched, not black
-  ambient: 0.30,        // higher floor: with the baked AO gone, the LIVE light alone owns
-                        //   shade — keep the darkest hatch open so the silhouette never
-                        //   fills solid and the drawing stays legible.
-  inkStrength: 0.82,    // confident graphite, but not so bold the form clots up
-  hatchScale: 7.5,      // ~7.5 px between strokes — a clear, legible pencil hatch
-  hatchSoft: 0.5,
-  hatchJitter: 0.35,
-  hatchDot: 0.0,        // DEFAULT = pencil cross-hatch (set →1 for the dotted look)
-  dotScale: 6.0,
-  contour: 0.9,         // a hair stronger: the inked contour now does more of the form-
-                        //   defining work (no baked 3D gradient under it)
-  paperWarmth: 0.4,     // lit paper warms toward the golden key — the only "light" tint
-  tintIdentity: 0.6,    // identity HUE only — applied to a value-flattened albedo
+  flatten: 0.92,        // STRONGLY flat: the shading snaps to hard fills, not a ramp
+  bands: 3,             // light / mid / shadow — three flat ink-wash regions
+  wrap: 0.55,           // soft underlying half-Lambert before it's posterised
+  shadeLift: 0.34,      // keep the shadow fill an open grey wash, never a black hole
+  noiseScale: 5.5,      // object-space wash frequency (a few mottled patches per body)
+  noiseStrength: 0.5,   // a confident watercolour/dry-ink mottle on every fill
+  edgeWobble: 0.32,     // the terminator wavers like a hand-painted shadow edge
+  outline: 1.05,        // a bold hand-inked contour — the form's 2D boundary
+  outlineWobble: 0.4,   // the edge breathes; never a clean vector rim
+  hatch: 0.3,           // a light pencil tooth in the shadow only (secondary, not primary)
+  hatchScale: 7.5,
+  paperWarmth: 0.4,     // lit fill warms toward the golden key — the only "light" tint
+  tintIdentity: 0.62,   // identity HUE only — applied to a value-flattened albedo
 };
 
-// Cheap screen-space value hash → soft per-region noise so the marks waver like a
-// human hand (lines aren't perfectly straight, dots aren't a perfect grid).
+// ---------------------------------------------------------------------------
+// TSL VALUE NOISE — implemented here (no engine helper). A hashed value-noise on a
+// lattice, smoothstep-interpolated, summed over a few octaves into fbm. Two flavours:
+//   • hash21 / vnoise2 : 2D, used for the screen-space hatch waver + paper grain.
+//   • hash31 / vnoise3 / fbm3 : 3D, sampled in OBJECT space so the watercolour wash
+//     and the terminator warp STICK to the surface as the bird flies.
+// ---------------------------------------------------------------------------
+
+// 2D hash → [0,1)
 const hash21 = /*#__PURE__*/ Fn(([p]: [any]) => {
-  const h = fract(sin(dot(p, vec2(127.1, 311.7))).mul(43758.5453));
-  return h;
+  return fract(sin(dot(p, vec2(127.1, 311.7))).mul(43758.5453));
 });
 
-// Smooth-ish value noise in screen space (bilinear of the hash on a coarse grid),
-// used to wobble line phase and break up the marks so they read as graphite, not print.
+// 2D smooth value noise (bilinear of the hash on a coarse grid).
 const vnoise2 = /*#__PURE__*/ Fn(([p]: [any]) => {
   const i = floor(p);
   const f = fract(p);
@@ -126,40 +132,70 @@ const vnoise2 = /*#__PURE__*/ Fn(([p]: [any]) => {
   return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 });
 
+// 3D hash → [0,1). Dotted against an irrational vector then sined/fracted — cheap,
+// no texture, stable per object-space lattice cell.
+const hash31 = /*#__PURE__*/ Fn(([p]: [any]) => {
+  return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))).mul(43758.5453));
+});
+
+// 3D smooth value noise: trilinear interpolation of the 8 corner hashes of the cell,
+// with smoothstep weights → a soft continuous field with no grid creases.
+const vnoise3 = /*#__PURE__*/ Fn(([p]: [any]) => {
+  const i = floor(p);
+  const f = fract(p);
+  const u: any = f.mul(f).mul(float(3.0).sub(f.mul(2.0))); // smoothstep weights (vec3)
+  const c000 = hash31(i.add(vec3(0.0, 0.0, 0.0)));
+  const c100 = hash31(i.add(vec3(1.0, 0.0, 0.0)));
+  const c010 = hash31(i.add(vec3(0.0, 1.0, 0.0)));
+  const c110 = hash31(i.add(vec3(1.0, 1.0, 0.0)));
+  const c001 = hash31(i.add(vec3(0.0, 0.0, 1.0)));
+  const c101 = hash31(i.add(vec3(1.0, 0.0, 1.0)));
+  const c011 = hash31(i.add(vec3(0.0, 1.0, 1.0)));
+  const c111 = hash31(i.add(vec3(1.0, 1.0, 1.0)));
+  const x00 = mix(c000, c100, u.x);
+  const x10 = mix(c010, c110, u.x);
+  const x01 = mix(c001, c101, u.x);
+  const x11 = mix(c011, c111, u.x);
+  const y0 = mix(x00, x10, u.y);
+  const y1 = mix(x01, x11, u.y);
+  return mix(y0, y1, u.z);
+});
+
+// 3D fBm — three octaves of vnoise3, halving amplitude / ~doubling frequency, with
+// an offset per octave so they don't align. Returns ~[0,1]. This is the
+// watercolour/dry-ink wash that mottles the flat fills and warps the terminator.
+const fbm3 = /*#__PURE__*/ Fn(([p]: [any]) => {
+  const o1 = vnoise3(p);
+  const o2 = vnoise3(p.mul(2.03).add(vec3(11.5, 3.2, 7.8)));
+  const o3 = vnoise3(p.mul(4.07).add(vec3(5.1, 19.3, 2.4)));
+  // weights sum to 1 so the result stays in ~[0,1]
+  return o1.mul(0.57).add(o2.mul(0.29)).add(o3.mul(0.14));
+});
+
 // ONE hatch layer: parallel screen-space lines at angle (ca, sa), spaced `scale`
-// pixels, with a soft edge and a little noisy waver. Returns INK COVERAGE in [0,1]
-// (1 = on a line / full graphite, 0 = bare paper between lines). `reveal` gates the
-// layer in as the shaded value crosses `thresh` (so darker areas grow more layers).
+// pixels, soft-edged with a little noisy waver. Returns INK COVERAGE in [0,1].
 const hatchLayer = /*#__PURE__*/ Fn((
-  [frag, ca, sa, scale, soft, jitter, phase]:
-  [any, any, any, any, any, any, any],
+  [frag, ca, sa, scale, jitter, phase]:
+  [any, any, any, any, any, any],
 ) => {
-  // rotate the fragment coords into the line's frame; the line runs along one axis
-  // and repeats along the other.
   const u = frag.x.mul(ca).add(frag.y.mul(sa));
-  // a slow noise waver perpendicular to the lines → the strokes aren't dead straight
   const wob = vnoise2(frag.mul(0.06).add(phase)).sub(0.5).mul(jitter).mul(scale);
   const coord = u.add(wob).div(scale).add(phase);
-  // triangle wave 0..1 across one line period; the stroke sits near the centre.
   const tri = abs(fract(coord).sub(0.5)).mul(2.0); // 0 at line centre → 1 between
-  // a soft line: full ink at the centre, fading out by `lineHalf`. `soft` widens the
-  // falloff so the graphite edge is fuzzy rather than a crisp printed rule.
-  const lineHalf = mix(float(0.34), float(0.6), soft);
-  const cov = oneMinus(smoothstep(float(0.06), lineHalf, tri));
-  // graphite grain along the stroke: nibble the coverage with fine noise so the line
-  // is dry/broken (bristly), not a solid wire.
+  const cov = oneMinus(smoothstep(float(0.08), float(0.5), tri));
   const grain = vnoise2(vec2(u.mul(0.5), frag.y.mul(ca).sub(frag.x.mul(sa)).mul(0.5)));
   return clamp(cov.mul(float(0.75).add(grain.mul(0.5))), float(0.0), float(1.0));
 });
 
 /**
- * Build the hand-drawn bird material. Same signature/return type as before, so
+ * Build the flat hand-drawn bird material. Same signature/return type as before, so
  * Bird.ts's call sites (`makeBirdMaterial()` / `makeBirdMaterial({...})`) are
  * unchanged. The baked per-vertex wash is read as the albedo and used only to TINT
- * the ink/paper so the drawing keeps the creature's identity; lighting → drawing
- * density is owned entirely by colorNode below.
+ * the flat fills to the creature's identity; light → flat-fill choice is owned by
+ * colorNode below.
  *
- * @param opts  optional per-part overrides (wings carry a cooler slate ink cast).
+ * @param opts  optional per-part overrides (legs use a finer hatch; wings can carry
+ *              a cooler slate cast via emissiveTint).
  */
 export function makeBirdMaterial(opts: BirdShadeOpts = {}): BirdMaterial {
   const o = { ...DEFAULTS, ...opts };
@@ -171,171 +207,171 @@ export function makeBirdMaterial(opts: BirdShadeOpts = {}): BirdMaterial {
   mat.fog = false; // the painterly world has fog off; the post pass owns atmosphere
 
   // --- uniforms (exposed for live tuning without a rebuild) ---
+  const uFlatten = uniform(o.flatten);
+  const uBands = uniform(o.bands);
   const uWrap = uniform(o.wrap);
-  const uAmbient = uniform(o.ambient);
-  const uInk = uniform(o.inkStrength);
+  const uShadeLift = uniform(o.shadeLift);
+  const uNoiseScale = uniform(o.noiseScale);
+  const uNoiseStrength = uniform(o.noiseStrength);
+  const uEdgeWobble = uniform(o.edgeWobble);
+  const uOutline = uniform(o.outline);
+  const uOutlineWobble = uniform(o.outlineWobble);
+  const uHatch = uniform(o.hatch);
   const uHatchScale = uniform(o.hatchScale);
-  const uHatchSoft = uniform(o.hatchSoft);
-  const uHatchJitter = uniform(o.hatchJitter);
-  const uHatchDot = uniform(o.hatchDot);
-  const uDotScale = uniform(o.dotScale);
-  const uContour = uniform(o.contour);
   const uPaperWarmth = uniform(o.paperWarmth);
   const uTintIdentity = uniform(o.tintIdentity);
 
   const sun = vec3(SUN.x, SUN.y, SUN.z);
   const paper = vec3(PAPER.r, PAPER.g, PAPER.b);
+  const shadowCol = vec3(SHADOW.r, SHADOW.g, SHADOW.b);
+  const midCol = vec3(MIDWASH.r, MIDWASH.g, MIDWASH.b);
   const ink = vec3(INK.r, INK.g, INK.b);
   const keyWarm = vec3(KEY_WARM.r, KEY_WARM.g, KEY_WARM.b);
 
-  // Base albedo = the baked painterly vertex wash (heron-grey / charcoal / ochre).
-  // It is used ONLY for IDENTITY — but the baked wash carries its own 3D shading
-  // (top/under gradients, baked AO, a `sunlit` term, feather shading). If we tinted
-  // with it raw, those baked gradients would show through and FIGHT the live hatch
-  // (a 3D-lit model with hatching on top). So we FLATTEN its value: keep the
-  // hue/chroma (the *colour identity* — grey plumage vs warm ochre bill vs charcoal
-  // primaries) but normalise its lightness to a constant mid. Then the only value
-  // variation on the bird comes from the LIVE light below, never from the bake.
+  // --- IDENTITY ALBEDO (HUE ONLY) --------------------------------------------
+  // Base albedo = the baked painterly vertex wash (heron-grey / charcoal / ochre),
+  // but the bake carries its OWN 3D shading (top/under gradients, baked AO, a sunlit
+  // term). Tinting with it raw would re-introduce that 3D gradient and fight the flat
+  // fills. So FLATTEN its value: keep the hue/chroma (the colour identity — grey
+  // plumage vs warm bill vs charcoal primaries) but re-seat lightness to a constant
+  // mid. The only value variation on the bird then comes from the quantized live
+  // light below, never from the bake.
   const rawAlbedo = vertexColor().rgb;
-  // perceptual luma of the baked colour (its 3D-shaded value we want to discard)
   const albLuma = dot(rawAlbedo, vec3(0.299, 0.587, 0.114));
-  // chroma = colour direction with the (3D-shaded) brightness divided out, then
-  // re-seated at a constant MID value. So #2b2f38 charcoal and #e8b04a ochre keep
-  // their HUE but no longer carry the bake's dark/light — a flat identity swatch.
-  const FLAT_VALUE = float(0.62); // constant mid lightness for every identity swatch
+  const FLAT_VALUE = float(0.62);
   const albedo = rawAlbedo.div(max(albLuma, float(0.04))).mul(FLAT_VALUE);
 
-  // World-space normal so shading (and thus drawing density) tracks the sun as the
-  // bird banks / flaps / wheels.
+  // --- OBJECT-SPACE WASH COORD ------------------------------------------------
+  // Sample the fbm wash in OBJECT space so the watercolour grain and the terminator
+  // warp are PAINTED ON the bird — they stick to the surface and don't swim as it
+  // banks. (positionLocal is pre-skinning; for an NPR wash that's perfect — the marks
+  // sit on the body like ink, undisturbed by the flap.)
+  const objP = positionLocal.xyz.mul(uNoiseScale);
+  const wash = fbm3(objP);                         // ~[0,1] coarse-ish mottle
+  const washFine = fbm3(objP.mul(2.7).add(vec3(8.0))); // finer second wash for grain
+
+  // World-space normal so the (quantized) light tracks the sun as the bird banks.
   const N = normalWorld.normalize();
 
-  // --- SHADED VALUE (drives the drawing density) -------------------------------
+  // --- UNDERLYING LIGHT (before quantizing) ----------------------------------
   // Half-Lambert WRAP: remap n·sun from [-1,1] into a soft [0,1]; never crushes the
-  // shaded side to black, the gentle illustrated falloff a hand would actually draw.
+  // shaded side to black. Lift out of the floor by `shadeLift` so the shadow fill is
+  // an open grey, not a black hole.
   const ndl = dot(N, sun);
   const wrapped = mix(
-    max(ndl, float(0.0)),                 // wrap = 0 → plain Lambert
-    ndl.mul(0.5).add(0.5),                // wrap = 1 → fully wrapped half-Lambert
+    max(ndl, float(0.0)),       // wrap = 0 → plain Lambert
+    ndl.mul(0.5).add(0.5),      // wrap = 1 → fully wrapped half-Lambert
     uWrap,
   );
-  // value: 1 = lit (bare paper), 0 = deep shade (dense marks). Lift out of the
-  // floor by `ambient` so the darkest shade still leaves some paper showing.
-  const value = clamp(uAmbient.add(wrapped.mul(oneMinus(uAmbient))), float(0.0), float(1.0));
-  // INK AMOUNT — how much drawing we lay down; inverse of value. The darker the
-  // surface, the more graphite. Eased a touch so the build-up reads like tone.
-  const tone = oneMinus(value); // 0 (lit) → 1 (deep shade)
+  // WARP the light value by the object-space wash BEFORE quantizing → the boundary
+  // between fills (the terminator) bends and wavers along the noise instead of tracing
+  // the clean geometric terminator. This is what turns the shadow edge into a
+  // hand-painted line rather than a 3D light/dark seam.
+  const warpedLight = clamp(
+    wrapped.add(wash.sub(0.5).mul(uEdgeWobble)),
+    float(0.0), float(1.0),
+  );
 
-  // --- screen-space fragment coordinates (constant on-screen mark size) ---------
-  // screenCoordinate is in physical pixels; that's the "paper" the marks live on.
-  const frag = screenCoordinate.xy;
-
-  // ============================ PENCIL CROSS-HATCHING ==========================
-  // Build up to FOUR hatch layers at staggered orientations. Each layer is gated in
-  // as `tone` rises past a threshold, so:
-  //   bright (tone≈0)  → bare paper
-  //   light-mid        → 1 direction (single hatch)
-  //   mid              → + crossing direction (cross-hatch)
-  //   dark             → + a third/fourth steeper layer (dense cross-hatch)
-  // The four directions (≈ 22°, 112°, 67°, 157°) give a believable hand build-up.
-  const s1 = uHatchScale;
-  const s2 = uHatchScale.mul(0.92); // slightly different spacing per layer (organic)
-  const s3 = uHatchScale.mul(1.12);
-  const s4 = uHatchScale.mul(0.8);
-
-  // angle (cos, sin) pairs — precomputed constants
-  const A1 = vec2(0.927, 0.375);   // ~22°
-  const A2 = vec2(-0.375, 0.927);  // ~112° (crosses A1)
-  const A3 = vec2(0.391, 0.921);   // ~67°
-  const A4 = vec2(-0.921, 0.391);  // ~157°
-
-  const jit = uHatchJitter;
-  const soft = uHatchSoft;
-  const h1 = hatchLayer(frag, A1.x, A1.y, s1, soft, jit, float(0.0));
-  const h2 = hatchLayer(frag, A2.x, A2.y, s2, soft, jit, float(13.3));
-  const h3 = hatchLayer(frag, A3.x, A3.y, s3, soft, jit, float(27.1));
-  const h4 = hatchLayer(frag, A4.x, A4.y, s4, soft, jit, float(41.7));
-
-  // reveal masks: each layer eases in over a tone window (soft so the build-up of
-  // value reads as continuous tone, not hard bands).
-  const r1 = smoothstep(float(0.12), float(0.34), tone);
-  const r2 = smoothstep(float(0.34), float(0.55), tone);
-  const r3 = smoothstep(float(0.55), float(0.74), tone);
-  const r4 = smoothstep(float(0.74), float(0.92), tone);
-
-  // accumulate hatch coverage; max() so overlapping layers stay graphite-dark (ink
-  // doesn't get "darker than black"), each gated by its reveal.
-  let hatchCov = h1.mul(r1);
-  hatchCov = max(hatchCov, h2.mul(r2));
-  hatchCov = max(hatchCov, h3.mul(r3));
-  hatchCov = max(hatchCov, h4.mul(r4));
-  // and a touch of additive density in the very darkest tone so deep shade truly
-  // fills in (where all four cross) without flattening to a solid block.
-  hatchCov = clamp(hatchCov.add(h1.add(h2).mul(r4).mul(0.25)), float(0.0), float(1.0));
-
-  // ============================ STIPPLE / HALFTONE DOTS ========================
-  // A screen-space dot grid whose dot RADIUS grows with `tone` → pointillist /
-  // dotted shading that echoes the world's dab language. Jittered cell centres so
-  // it reads hand-stippled, not a printer's screen.
-  const cell = frag.div(uDotScale);
-  const cellId = floor(cell);
-  const cellUv = fract(cell).sub(0.5); // -0.5..0.5 within the cell
-  // jitter each dot's centre a little by a per-cell hash
-  const jx = hash21(cellId).sub(0.5).mul(0.5);
-  const jy = hash21(cellId.add(vec2(5.2, 1.3))).sub(0.5).mul(0.5);
-  const dotR = length(cellUv.sub(vec2(jx, jy)));
-  // dot radius grows with tone (0 → no dot, ~0.6 → dots kiss). A faint per-cell size
-  // variation keeps it organic.
-  const sizeVar = hash21(cellId.add(vec2(2.7, 9.1))).mul(0.18).add(0.91);
-  const targetR = tone.mul(0.62).mul(sizeVar);
-  // soft-edged dot: inside radius → full ink, feather the rim by ~1 px-worth.
-  const dotCov = oneMinus(smoothstep(targetR.sub(float(0.06)), targetR.add(float(0.06)), dotR))
-    .mul(smoothstep(float(0.0), float(0.05), tone)); // no dots on bare-lit paper
-
-  // ============================ HATCH ↔ DOT BLEND ==============================
-  // uHatchDot: 0 = pure pencil cross-hatch, 1 = pure stipple/halftone dots.
-  const markCov = mix(hatchCov, dotCov, uHatchDot);
-
-  // ============================ INK CONTOUR ===================================
-  // Fresnel from the view direction: 1 at grazing silhouette/interior edges, 0
-  // facing us — a hand-inked contour line bounding the form. Tasteful, not a thick
-  // cartoon outline: a tight grazing band plus a touch of noise so the inked edge
-  // wavers like a pen line.
-  const fres = oneMinus(clamp(abs(dot(N, positionViewDirection.normalize())), float(0.0), float(1.0)));
-  const edgeNoise = vnoise2(frag.mul(0.08)).mul(0.25).add(0.85);
-  const contourCov = smoothstep(float(0.62), float(0.9), fres).mul(edgeNoise).mul(uContour);
-
-  // total ink coverage: the drawn marks PLUS the inked contour, scaled by overall
-  // ink strength. Clamped so it can't exceed full ink.
-  const inkCov = clamp(max(markCov, contourCov).mul(uInk), float(0.0), float(1.0));
-
-  // ============================ INK-ON-PAPER OUTPUT ===========================
-  // Give the paper + ink the bird's own identity — but ONLY its HUE. The albedo is
-  // already value-flattened above, so tinting the paper toward it tints the COLOUR
-  // (grey plumage / warm bill) WITHOUT re-introducing the baked 3D gradients.
+  // --- QUANTIZE: smooth ramp → FLAT FILLS (the core "less 3D" move) -----------
+  // Posterise the warped light into `bands` flat steps (2 = light/shadow, 3 = + mid).
+  // step() positions, smoothstep() softens the knife-edge between fills just enough
+  // that it reads as a brushed wash boundary, not aliased banding — but it is NOT a
+  // smooth gradient: between the (noise-wobbled) thresholds the value is FLAT. We then
+  // mix between the flat result and the original smooth `wrapped` by (1-flatten), so
+  // flatten = 1 is fully posterised and flatten = 0 falls back to the old smooth ramp.
   //
-  // The paper's VALUE (its brightness) comes from the LIVE light alone: build the
-  // identity-tinted paper at its flat base, then multiply by the live `value` so the
-  // sunlit side is bright paper and the shaded side darkens smoothly — a single,
-  // coherent light owning the whole form (no bake fighting the hatch).
-  const warmedPaper = mix(paper, paper.mul(keyWarm), value.mul(uPaperWarmth));
-  // flatten the warm paper to its own value too, so mixing toward the flat albedo
-  // doesn't tilt the result light/dark — only its hue shifts toward the identity.
-  const idPaperFlat = mix(warmedPaper, max(albedo, vec3(0.0)), uTintIdentity.mul(0.55));
-  // re-seat the live light as the paper's value: shaded paper sinks toward a soft
-  // warm grey (not black), lit paper stays full. This is the ONLY value gradient.
-  const shadePaper = idPaperFlat.mul(0.5);            // where the live light is darkest
-  const idPaper = mix(shadePaper, idPaperFlat, value); // value = live n·sun only
-  // ink tone: charcoal nudged toward a deep version of the local (flat) albedo so the
-  // warm bill inks warmer/sepia and the grey plumage inks cool graphite — kept dark.
-  const albInk = min(albedo.mul(0.4), vec3(0.55, 0.55, 0.55));
-  const idInk = mix(ink, albInk, uTintIdentity.mul(0.7));
+  // Two thresholds carve up to three fills; the second is gated off when bands < 3 so
+  // the body collapses to a clean light/shadow two-tone.
+  const useMid = step(float(2.5), uBands); // 1 when bands >= 3
+  const t0 = float(0.5);   // light  ↔ (mid|shadow) boundary
+  const t1 = float(0.78);  // mid    ↔ light boundary (only when useMid)
+  const soft = float(0.06); // a hair of softness so the wash edge isn't a hard alias
+  // build a 0/0.5/1 quantized value:
+  //   below t0           → shadow fill (0)
+  //   t0..t1 (if mid)    → mid fill   (0.5)
+  //   above t1 (or t0)   → light fill (1)
+  const upper = smoothstep(t1.sub(soft), t1.add(soft), warpedLight);
+  const lowerStep = smoothstep(t0.sub(soft), t0.add(soft), warpedLight);
+  // with a mid band: shadow→mid at t0, mid→light at t1.
+  const qMid = lowerStep.mul(0.5).add(upper.mul(0.5));
+  // without a mid band: a single light/shadow split at t0.
+  const qTwo = lowerStep;
+  const quant = mix(qTwo, qMid, useMid);
+  // blend smooth↔flat by the flatten knob.
+  const litFrac = mix(wrapped, quant, uFlatten); // 0 = shadow fill … 1 = light fill
 
-  // lay ink onto paper by coverage.
-  let outc = mix(idPaper, idInk, inkCov);
+  // --- BUILD THE FLAT IDENTITY FILLS -----------------------------------------
+  // Each fill is a flat ink-wash tone tinted toward the bird's (value-flattened)
+  // albedo hue so the creature's identity survives (grey body / warm bill). The lit
+  // fill warms toward the golden key; the shadow fill stays a cool open grey.
+  const tintLight = mix(paper, paper.mul(keyWarm), uPaperWarmth);
+  const litFill = mix(tintLight, albedo, uTintIdentity.mul(0.5));
+  // shadow fill: cool wash, tinted toward a slightly darker version of the identity.
+  const shFill = mix(shadowCol, albedo.mul(0.72), uTintIdentity.mul(0.6));
+  // mid fill: between the two, tinted toward identity too.
+  const mdFill = mix(midCol, albedo.mul(0.86), uTintIdentity.mul(0.55));
+  // lift the shadow fill toward the mid by `shadeLift` so the dark side stays an OPEN
+  // wash (a drawing's shadows aren't black).
+  const shFillLifted = mix(shFill, mdFill, uShadeLift);
+
+  // compose the three flat fills by the quantized litFrac. With a mid band the value
+  // lands on 0 / 0.5 / 1; map those to shadow / mid / light. Without it, litFrac is
+  // 0 or 1 and the mid step is never reached.
+  const lowHalf = mix(shFillLifted, mdFill, clamp(litFrac.mul(2.0), float(0.0), float(1.0)));
+  const highHalf = mix(mdFill, litFill, clamp(litFrac.sub(0.5).mul(2.0), float(0.0), float(1.0)));
+  let fill = mix(lowHalf, highHalf, step(float(0.5), litFrac));
+
+  // --- WATERCOLOUR / DRY-INK MOTTLE on the flat fills ------------------------
+  // Multiply each flat fill by an object-space fbm wash so it reads as pigment that
+  // pooled and dried unevenly — the single strongest cue that this is PAINT, not a
+  // shaded plastic surface. Centred on 1 so it darkens AND lightens patches; a finer
+  // octave adds tooth. A faint screen-space paper grain layered on top sells the
+  // "drawn on a sheet" feel. Kept multiplicative + clamped so it can't blow out.
+  const frag = screenCoordinate.xy;
+  const paperGrain = vnoise2(frag.mul(0.5)).sub(0.5).mul(0.06); // subtle on-paper tooth
+  const mottle = oneMinus(uNoiseStrength).add(
+    wash.mul(0.6).add(washFine.mul(0.4)).mul(uNoiseStrength).mul(2.0).mul(0.5),
+  ).add(paperGrain);
+  fill = clamp(fill.mul(mottle), vec3(0.0), vec3(1.4));
+
+  // --- SPARSE PENCIL HATCH (secondary tooth, shadow only) --------------------
+  // Two crossing screen-space hatch layers, revealed ONLY in the shadow fill, give
+  // the dark side a little hand-drawn graphite tooth without re-introducing a
+  // gradient. Dialled low by default — the flat fills are the primary look.
+  const A1 = vec2(0.927, 0.375);  // ~22°
+  const A2 = vec2(-0.375, 0.927); // ~112° (crosses A1)
+  const h1 = hatchLayer(frag, A1.x, A1.y, uHatchScale, float(0.35), float(0.0));
+  const h2 = hatchLayer(frag, A2.x, A2.y, uHatchScale.mul(0.92), float(0.35), float(13.3));
+  // shadow mask: 1 deep in the shadow fill, 0 in the light fill (so light stays clean
+  // paper). Uses the quantized litFrac so the hatch lives exactly inside the dark fill.
+  const shadowMask = oneMinus(smoothstep(float(0.1), float(0.55), litFrac));
+  const hatchCov = max(h1, h2).mul(shadowMask).mul(uHatch);
+
+  // --- WOBBLY INKED CONTOUR ---------------------------------------------------
+  // Fresnel from the view direction: 1 at grazing silhouette / interior edges, 0
+  // facing us — a hand-inked contour bounding the form. The threshold is WOBBLED by
+  // the object-space wash so the line thickens/thins and breathes like a pen line; a
+  // touch of screen-space noise adds dry breaks. THIS is what makes the flat fills
+  // read as an intentional drawing rather than an untextured blob.
+  const fres = oneMinus(clamp(abs(dot(N, positionViewDirection.normalize())), float(0.0), float(1.0)));
+  const wob = wash.sub(0.5).mul(uOutlineWobble); // ±wobble on the edge threshold
+  const edgeNoise = vnoise2(frag.mul(0.09)).mul(0.3).add(0.8); // dry breaks along the line
+  const lo = float(0.55).add(wob);
+  const hi = float(0.86).add(wob);
+  const contourCov = smoothstep(lo, hi, fres).mul(edgeNoise).mul(uOutline);
+
+  // total ink coverage (hatch tooth + the bounding contour), clamped to full ink.
+  const inkCov = clamp(max(hatchCov, contourCov), float(0.0), float(1.0));
+
+  // --- INK-ON-FILL OUTPUT -----------------------------------------------------
+  // ink tone tinted toward a deep version of the local identity so the warm bill inks
+  // a touch warmer and the grey body inks cool charcoal — but kept dark.
+  const albInk = min(albedo.mul(0.32), vec3(0.5));
+  const idInk = mix(ink, albInk, uTintIdentity.mul(0.6));
+  let outc = mix(fill, idInk, inkCov);
 
   // Optional cool sheen tint (used by the wing membranes to keep their slate cast):
-  // a touch of the tint pushed into both ink and paper so the wing drawing reads a
-  // hair cooler/darker than the body — the slate primaries as graphite.
+  // a touch of the tint pushed into the result so the wing reads a hair cooler.
   if (opts.emissiveTint) {
     const t = opts.emissiveTint;
     outc = mix(outc, outc.mul(vec3(t.r, t.g, t.b).mul(2.2)), float(0.10));
@@ -345,24 +381,26 @@ export function makeBirdMaterial(opts: BirdShadeOpts = {}): BirdMaterial {
 
   // expose knobs for live tuning (read/written as uniform .value)
   (mat as BirdMaterial).knobs = {
-    wrap: uWrap, ambient: uAmbient, inkStrength: uInk,
-    hatchScale: uHatchScale, hatchSoft: uHatchSoft, hatchJitter: uHatchJitter,
-    hatchDot: uHatchDot, dotScale: uDotScale, contour: uContour,
-    paperWarmth: uPaperWarmth, tintIdentity: uTintIdentity,
+    flatten: uFlatten, bands: uBands, wrap: uWrap, shadeLift: uShadeLift,
+    noiseScale: uNoiseScale, noiseStrength: uNoiseStrength, edgeWobble: uEdgeWobble,
+    outline: uOutline, outlineWobble: uOutlineWobble, hatch: uHatch,
+    hatchScale: uHatchScale, paperWarmth: uPaperWarmth, tintIdentity: uTintIdentity,
   };
   return mat as BirdMaterial;
 }
 
 export interface BirdMaterialKnobs {
+  flatten: ReturnType<typeof uniform>;
+  bands: ReturnType<typeof uniform>;
   wrap: ReturnType<typeof uniform>;
-  ambient: ReturnType<typeof uniform>;
-  inkStrength: ReturnType<typeof uniform>;
+  shadeLift: ReturnType<typeof uniform>;
+  noiseScale: ReturnType<typeof uniform>;
+  noiseStrength: ReturnType<typeof uniform>;
+  edgeWobble: ReturnType<typeof uniform>;
+  outline: ReturnType<typeof uniform>;
+  outlineWobble: ReturnType<typeof uniform>;
+  hatch: ReturnType<typeof uniform>;
   hatchScale: ReturnType<typeof uniform>;
-  hatchSoft: ReturnType<typeof uniform>;
-  hatchJitter: ReturnType<typeof uniform>;
-  hatchDot: ReturnType<typeof uniform>;
-  dotScale: ReturnType<typeof uniform>;
-  contour: ReturnType<typeof uniform>;
   paperWarmth: ReturnType<typeof uniform>;
   tintIdentity: ReturnType<typeof uniform>;
 }
