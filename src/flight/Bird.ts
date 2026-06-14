@@ -99,21 +99,25 @@ export class Bird implements Updatable {
   constructor(scene: THREE.Scene, flight: FlightController) {
     this.flight = flight;
 
-    // CUSTOM STYLISED TSL SHADING — not PBR. The body/wing/leg surfaces are lit by a
-    // hand-painted, illustrated light model (soft wrapped diffuse, warm key / cool
-    // shade, a faint painterly broken-colour break-up, a sky-tinted fresnel rim and a
-    // gentle inked contour) so the bird reads as part of the soft painterly meadow
-    // rather than a glossy CG object. The baked per-vertex wash stays as the albedo;
-    // the shader only re-lights it. World-space normals keep the key pinned to the
+    // HAND-DRAWN NPR "SKETCH" SHADING — not PBR. The body/wing/leg surfaces are drawn
+    // in screen-space GRAPHITE: a soft wrapped n·sun gives a shaded VALUE that drives
+    // drawing density, laid down as PENCIL CROSS-HATCH layers (bare paper in light,
+    // single then crossing then dense hatch as it darkens) with a stipple/halftone-DOT
+    // alternative (a hatch↔dot knob), bounded by a hand-inked fresnel CONTOUR, output
+    // as INK-ON-PAPER tinted to the bird's own palette. So the pelican reads as a
+    // drawing moving through the painted world — "3D drawn, the rest painted." The
+    // baked per-vertex wash is reused only to tint the ink/paper to the creature's
+    // identity. World-space normals keep the shading (and hatch density) pinned to the
     // scene sun as the bird banks and flaps. (See birdMaterial.makeBirdMaterial.)
     const bodyMat = makeBirdMaterial();
-    // the wing membranes keep a touch cooler/slate cast (their charcoal primaries),
-    // with a hair more contour so the long flight feathers read as separate planes.
+    // the wing membranes keep a touch cooler/darker slate ink (their charcoal
+    // primaries), with a hair more contour so the long flight feathers read as
+    // separate inked planes, and a slightly finer hatch for the long feather chords.
     const wingMat = makeBirdMaterial({
-      warmth: 0.26, contour: 0.26, emissiveTint: new THREE.Color('#3a4150'),
+      hatchScale: 6.2, contour: 0.95, emissiveTint: new THREE.Color('#3a4150'),
     });
-    // legs are small, warm ochre — slightly less broken-colour so they stay clean.
-    const legMat = makeBirdMaterial({ jitter: 0.035, rim: 0.22 });
+    // legs are small — a finer, lighter pencil so the thin tarsi don't go solid black.
+    const legMat = makeBirdMaterial({ hatchScale: 5.0, inkStrength: 0.8, contour: 0.7 });
 
     this.root.add(this.bob);
 
