@@ -297,12 +297,16 @@ function bodySpine(): Station[] {
     S(new THREE.Vector3(0, 0.7, 0.99), 0.095, 0.1, 0.0, BONE.HEAD), // crown
     S(new THREE.Vector3(0, 0.675, 1.07), 0.082, 0.085, 0.0, BONE.HEAD),
     S(new THREE.Vector3(0, 0.645, 1.13), 0.055, 0.05, 0.0, BONE.HEAD, 0.0), // lores → bill base
-    // ---- bill (droops, flattens to a broad lens, tip hooks down) ----
-    S(new THREE.Vector3(0, 0.628, 1.2), 0.05, 0.034, 0.0, BONE.HEAD, 0.4, 0.45),
-    S(new THREE.Vector3(0, 0.6, 1.34), 0.044, 0.024, 0.0, BONE.HEAD, 1.0, 0.7),
-    S(new THREE.Vector3(0, 0.566, 1.48), 0.034, 0.018, 0.0, BONE.HEAD, 1.0, 0.8),
-    S(new THREE.Vector3(0, 0.527, 1.6), 0.02, 0.014, 0.0, BONE.HEAD, 1.0, 0.85),
-    S(new THREE.Vector3(0, 0.5, 1.66), 0.008, 0.012, 0.0, BONE.HEAD, 1.0, 0.6), // hooked nail
+    // ---- bill: the PELICAN's signature — a LONG, deep, broad-lens bill carried
+    // nearly straight forward (only a gentle droop), much longer than a gull/goose.
+    // Extended tip 1.66 → 2.12 and held wider along its length (slower taper) so it
+    // reads as the massive pelican bill. The lower-jaw closure table in
+    // buildLowerJawSkin is matched to these z/y so the beak still shuts (no gap).
+    S(new THREE.Vector3(0, 0.632, 1.24), 0.052, 0.034, 0.0, BONE.HEAD, 0.4, 0.45),
+    S(new THREE.Vector3(0, 0.612, 1.46), 0.05, 0.026, 0.0, BONE.HEAD, 1.0, 0.7),
+    S(new THREE.Vector3(0, 0.59, 1.7), 0.044, 0.02, 0.0, BONE.HEAD, 1.0, 0.8),
+    S(new THREE.Vector3(0, 0.566, 1.94), 0.03, 0.016, 0.0, BONE.HEAD, 1.0, 0.85),
+    S(new THREE.Vector3(0, 0.548, 2.12), 0.01, 0.012, 0.0, BONE.HEAD, 1.0, 0.6), // hooked nail
   ];
 }
 
@@ -481,10 +485,13 @@ function buildLowerJawSkin(): { geo: THREE.BufferGeometry } {
   //   head/skull underside ≈ y 0.60 (z 0.94..1.10)
   //   bill base underside  ≈ y 0.595 (z 1.13)  rising slightly to ≈0.60 (z 1.20)
   //   then dropping        ≈ y 0.584 (1.34) → 0.555 (1.48) → 0.519 (1.60) → 0.492 (1.66 nail)
+  // Matched to the LENGTHENED upper bill (tip now z2.12): underside y ≈ bill-centre y
+  // minus its half-height ry at each station, so the lower mandible's top edge tracks
+  // the upper bill's underside all the way to the new tip and the beak stays shut.
   const billUnder: { z: number; y: number }[] = [
     { z: 0.94, y: 0.605 }, { z: 1.06, y: 0.600 }, { z: 1.13, y: 0.595 },
-    { z: 1.20, y: 0.602 }, { z: 1.34, y: 0.584 }, { z: 1.48, y: 0.555 },
-    { z: 1.60, y: 0.519 }, { z: 1.66, y: 0.492 },
+    { z: 1.24, y: 0.598 }, { z: 1.46, y: 0.586 }, { z: 1.70, y: 0.570 },
+    { z: 1.94, y: 0.550 }, { z: 2.12, y: 0.536 },
   ];
   const upperUnderAt = (z: number): number => {
     if (z <= billUnder[0].z) return billUnder[0].y;
@@ -499,8 +506,8 @@ function buildLowerJawSkin(): { geo: THREE.BufferGeometry } {
   const OVERLAP = 0.016;     // top edge sits this far ABOVE the bill underside → shut
 
   const hingeZ = 0.94;       // root starts further back under the skull
-  const N = 16;
-  const len = 0.74;          // reaches forward to the bill tip (0.94 + 0.74 = 1.68)
+  const N = 18;
+  const len = 1.18;          // reaches forward to the LONGER bill tip (0.94 + 1.18 = 2.12)
   const pts: THREE.Vector3[] = [];
   const profs: { rx: number; ry: number; sag: number; buried: number }[] = [];
   for (let i = 0; i < N; i++) {

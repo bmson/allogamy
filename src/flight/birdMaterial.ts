@@ -216,6 +216,14 @@ export function makeBirdMaterial(opts: BirdShadeOpts = {}): BirdMaterial {
   // whole shading chain is owned by colorNode.
   mat.vertexColors = false;
   mat.fog = false; // the painterly world has fog off; the post pass owns atmosphere
+  // DOUBLE-SIDED: the wings are THIN membranes — with the default FrontSide culling,
+  // every back-facing triangle is dropped, so at most angles you see straight THROUGH
+  // the wing to the landscape behind (it reads as transparent / see-through tiles).
+  // Rendering both faces makes the wing a solid opaque surface from any side. (The
+  // body is a closed solid so this is a no-op for it beyond the back-face cost — one
+  // small mesh, negligible.) The material is fully OPAQUE (no transparent/opacity/
+  // alphaTest), so nothing here blends — the wing is solid pigment.
+  mat.side = THREE.DoubleSide;
 
   // --- uniforms (exposed for live tuning without a rebuild) ---
   const uFlatten = uniform(o.flatten);

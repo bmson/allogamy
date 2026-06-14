@@ -81,7 +81,7 @@ const REST_WRIST = -0.1;
 // the head UP to keep the bill aimed level/forward — exactly the folded-neck,
 // bill-forward silhouette. Sign: negative rotation.x lifts/reaches the neck UP,
 // positive folds it DOWN. Tunable — dial these from a screenshot.
-const REST_NECK_X = [-0.18, -0.22, 0.34, 0.36];
+const REST_NECK_X = [0.12, 0.14, 0.12, 0.10];
 
 const SCALE = 3.0;
 
