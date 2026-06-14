@@ -727,6 +727,27 @@ export function buildBodySkin(): BodyBuild {
   bodyGeo.dispose(); jaw.dispose(); tailFan.dispose();
   merged.computeVertexNormals();
 
+  // ---- wing↔body MERGE MASK on the body side ----
+  // Bake the SAME junction mask the wing carries (see buildWingSkin) onto the body's
+  // shoulder shelf — a gaussian around the wing-attach point, on the FLANKS only (not
+  // the dorsal midline). The shader reads it to drop the inked contour and relax the
+  // toon banding right where the wing buries in, so both surfaces meet with no "cut".
+  {
+    const bp = merged.attributes.position.array as Float32Array;
+    const bn = merged.attributes.position.count;
+    const mArr = new Float32Array(bn);
+    const cz = WING_ATTACH.z, cy = WING_ATTACH.y;
+    const izz = 1 / (2 * 0.5 * 0.5), iyy = 1 / (2 * 0.52 * 0.52);
+    for (let i = 0; i < bn; i++) {
+      const k = i * 3;
+      const ax = Math.abs(bp[k]);
+      const dz = bp[k + 2] - cz, dy = bp[k + 1] - cy;
+      const env = Math.exp(-(dz * dz) * izz - (dy * dy) * iyy);
+      mArr[i] = env * smoothstep(0.03, 0.12, ax); // flanks only
+    }
+    merged.setAttribute('aMerge', new THREE.BufferAttribute(mArr, 1));
+  }
+
   // ---- paint the whole unified skin in one pass ----
   paint(merged, (c, x, y, z, nx, ny, nz, bb) => {
     const top = (y - bb.min.y) / Math.max(1e-3, bb.max.y - bb.min.y);
@@ -795,6 +816,7 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
   const NSPAN = 56, NCHORD = 9;
   const top: number[] = [], bot: number[] = [];
   const skinIdx: number[] = [], skinWgt: number[] = [];
+  const mergeArr: number[] = []; // per-vertex wing↔body merge mask (1 at buried root → 0)
 
   // map a spanwise position x (0..WING_TIP) to (boneA,boneB,wB) blending weight
   const weightAt = (xspan: number): [number, number, number] => {
@@ -818,6 +840,10 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
     const t = i / (NSPAN - 1); // 0 root → 1 tip
     const xspan = t * WING_TIP;
     const x = side * xspan;
+    // merge mask: 1 over the buried inner root (where the wing overlaps the body),
+    // easing to 0 by ~40% span where the wing is a clear free membrane. The shader
+    // uses it to drop the inked contour + relax the toon banding at the junction.
+    const mergeV = smoothstep(0.42, 0.04, t);
     // chord (fore-aft depth): broad at the arm, tapering to slim primaries. The
     // root chord is broadened (rootFair) so the membrane fairs into the body as a
     // wide fillet rather than a narrow blade.
@@ -902,6 +928,7 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
       bot.push(xx, WING_ATTACH.y + y - th * 0.7, WING_ATTACH.z + zr);
       // skin weights (same for top & bottom vertex of this station/chord)
       skinIdx.push(bA, bB, 0, 0); skinWgt.push(1 - wB, wB, 0, 0);
+      mergeArr.push(mergeV);
     }
   }
   // bottom grid skin weights mirror the top (appended in membraneFromGrids order)
@@ -909,11 +936,13 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
   for (let k = 0; k < topCount; k++) {
     skinIdx.push(skinIdx[k * 4], skinIdx[k * 4 + 1], 0, 0);
     skinWgt.push(skinWgt[k * 4], skinWgt[k * 4 + 1], 0, 0);
+    mergeArr.push(mergeArr[k]); // bottom-grid merge mask mirrors the top
   }
 
   const g = membraneFromGrids(top, bot, NSPAN, NCHORD, side < 0);
   g.setAttribute('skinIndex', new THREE.BufferAttribute(new Uint16Array(skinIdx), 4));
   g.setAttribute('skinWeight', new THREE.BufferAttribute(new Float32Array(skinWgt), 4));
+  g.setAttribute('aMerge', new THREE.BufferAttribute(new Float32Array(mergeArr), 1));
   g.computeVertexNormals();
 
   // paint the wing — built to read as FEATHERED plumage, not a smooth flap.

@@ -2,7 +2,7 @@ import * as THREE from 'three/webgpu';
 import {
   Fn, vec2, vec3, float, mix, clamp, max, min, dot, smoothstep, fract, sin, floor,
   oneMinus, abs, uniform, vertexColor, normalWorld, positionLocal,
-  positionViewDirection, screenCoordinate, length, step,
+  positionViewDirection, screenCoordinate, length, step, attribute,
 } from 'three/tsl';
 import { SUN_DIR } from '../config';
 
@@ -89,6 +89,10 @@ export interface BirdShadeOpts {
   paperWarmth?: number; // how much the lit fill warms toward the scene's golden key
   tintIdentity?: number; // how strongly the fills take on the bird's own albedo hue
   emissiveTint?: THREE.Color; // optional cool cast (wings keep their slate identity)
+  mergeMask?: boolean;  // read the per-vertex `aMerge` attribute (body + wings) and, at
+                        // the wing↔body junction, suppress the inked contour AND relax
+                        // the toon quantization to a smooth ramp — so the wing root flows
+                        // into the body with no inked "cut" line and no hard band-step.
 }
 
 const DEFAULTS: Required<Omit<BirdShadeOpts, 'emissiveTint'>> = {
@@ -105,6 +109,7 @@ const DEFAULTS: Required<Omit<BirdShadeOpts, 'emissiveTint'>> = {
   hatchScale: 7.5,
   paperWarmth: 0.4,     // lit fill warms toward the golden key — the only "light" tint
   tintIdentity: 0.62,   // identity HUE only — applied to a value-flattened albedo
+  mergeMask: false,     // off for parts without the aMerge attribute (e.g. legs)
 };
 
 // ---------------------------------------------------------------------------
@@ -297,8 +302,18 @@ export function makeBirdMaterial(opts: BirdShadeOpts = {}): BirdMaterial {
   // without a mid band: a single light/shadow split at t0.
   const qTwo = lowerStep;
   const quant = mix(qTwo, qMid, useMid);
-  // blend smooth↔flat by the flatten knob.
-  const litFrac = mix(wrapped, quant, uFlatten); // 0 = shadow fill … 1 = light fill
+  // WING↔BODY MERGE MASK: 1 exactly where the wing root buries into the body (and on
+  // the body's matching shoulder shelf), 0 everywhere else. At the junction we relax
+  // the flatten toward a SMOOTH ramp so the wing root's near-flat plane doesn't fall
+  // into a different posterised light band than the curved body beside it — that band
+  // mismatch is what reads as a hard pale→dark "cut" where the wing meets the flank.
+  // Everywhere else the full flat 2D look is preserved.
+  const merge = o.mergeMask
+    ? clamp(attribute('aMerge', 'float'), float(0.0), float(1.0))
+    : float(0.0);
+  const localFlatten = uFlatten.mul(oneMinus(merge.mul(0.8)));
+  // blend smooth↔flat by the (locally relaxed) flatten knob.
+  const litFrac = mix(wrapped, quant, localFlatten); // 0 = shadow fill … 1 = light fill
 
   // --- BUILD THE FLAT IDENTITY FILLS -----------------------------------------
   // Each fill is a flat ink-wash tone tinted toward the bird's (value-flattened)
@@ -358,7 +373,8 @@ export function makeBirdMaterial(opts: BirdShadeOpts = {}): BirdMaterial {
   const edgeNoise = vnoise2(frag.mul(0.09)).mul(0.3).add(0.8); // dry breaks along the line
   const lo = float(0.55).add(wob);
   const hi = float(0.86).add(wob);
-  const contourCov = smoothstep(lo, hi, fres).mul(edgeNoise).mul(uOutline);
+  const contourCov = smoothstep(lo, hi, fres).mul(edgeNoise).mul(uOutline)
+    .mul(oneMinus(merge.mul(0.92))); // no inked seam where the wing buries into the body
 
   // total ink coverage (hatch tooth + the bounding contour), clamped to full ink.
   const inkCov = clamp(max(hatchCov, contourCov), float(0.0), float(1.0));

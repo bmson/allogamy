@@ -121,10 +121,13 @@ export class Bird implements Updatable {
     // creature's identity (grey body / charcoal primaries / warm bill). World-space
     // normals keep the (quantized) light flipping light↔shadow as the bird banks and
     // the sun tracks across it. (See birdMaterial.makeBirdMaterial.)
-    const bodyMat = makeBirdMaterial();
-    // Wings share the BODY material exactly — same flat fills + wash + contour + tint —
-    // so the wing reads continuous with the flank with no extra inked seam. (The user
-    // wanted the wing↔body contrast gone.)
+    // mergeMask: read the per-vertex aMerge attribute (baked on body + wings) so the
+    // wing↔body junction drops its inked contour and relaxes the toon banding — the wing
+    // root flows into the flank with no "cut" line / hard pale→dark band-step there.
+    const bodyMat = makeBirdMaterial({ mergeMask: true });
+    // Wings share the BODY material exactly — same flat fills + wash + contour + tint +
+    // the merge mask — so the wing reads continuous with the flank with no extra inked
+    // seam. (The user wanted the wing↔body contrast gone.)
     const wingMat = bodyMat;
     // legs are small & thin — a finer wash and a lighter outline so the slim tarsi keep
     // a clean drawn edge instead of clotting into solid ink.
