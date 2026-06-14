@@ -1,5 +1,7 @@
 import * as THREE from 'three/webgpu';
-import { positionLocal, time, sin, vec3, float } from 'three/tsl';
+import {
+  positionLocal, time, sin, vec3, float, mix, attribute, vertexColor, smoothstep, clamp,
+} from 'three/tsl';
 import { palette } from '../render/palette';
 import { CHUNK_SIZE, SUN_DIR } from '../config';
 import { TerrainField } from './TerrainField';
@@ -45,9 +47,22 @@ const RIPPLE = 0.05; // metres of vertical relief on the inner rings (very subtl
 const WAVE_AMP = 0.06; // metres of vertical ripple (world scale) — very subtle
 const WAVE_FREQ = 0.08; // spatial frequency (1/m) — long, lazy swells, not chop
 const WAVE_SPEED = 0.55; // how fast the ripple front drifts (the "current")
-const SHEEN_FREQ = 0.045; // spatial frequency of the moving sky-glint band (1/m)
-const SHEEN_SPEED = 0.35; // how fast the glint band slides along the surface
-const SHEEN_LIFT = 0.5; // peak extra sky-emissive added where a glint passes
+
+// ---- COLOUR-DRIVEN motion (the geometric ripple above is too small to read from a
+// fast, high glide, so the *visible* "it's alive" cue is animated COLOUR instead) ----
+// Drifting caustic bands: two crossing travelling sine fields interfere into moving
+// light/dark patches that slide across the surface — the eye reads flow even on a
+// near-flat low-poly disc.
+const CAUSTIC_FREQ_A = 0.17; // 1/m — primary caustic band frequency
+const CAUSTIC_FREQ_B = 0.1; // 1/m — secondary, crosses the first
+const CAUSTIC_SPEED = 0.85; // how fast the bright bands drift downstream
+const CAUSTIC_STRENGTH = 0.34; // how strongly the bands lighten the surface toward sky-blue
+// Shore foam: a pale lip that LAPS in and out at the waterline (a travelling pulse,
+// gated to the rim by the baked aShore factor) — reads as water breaking on the shore.
+const FOAM_SPEED = 1.7; // how fast the foam laps along the shore
+const FOAM_FREQ = 0.55; // 1/m — wavelength of the lapping band (short, frothy)
+const FOAM_STRENGTH = 0.9; // peak whiteness of the foam at the rim
+const FOAM = new THREE.Color('#eef6f7'); // near-white shore foam / splash
 
 /**
  * Calm, MOVING water surface material (TSL node material). Shared by every water
@@ -70,37 +85,64 @@ const SHEEN_LIFT = 0.5; // peak extra sky-emissive added where a glint passes
  */
 export function makeWaterMaterial(): THREE.MeshStandardNodeMaterial {
   const mat = new THREE.MeshStandardNodeMaterial();
-  mat.vertexColors = true;
-  mat.roughness = 0.55;
+  // vertexColors OFF: we read the baked wash explicitly via vertexColor() and own the
+  // whole colour chain in colorNode (so the flag can't double-multiply our result).
+  mat.vertexColors = false;
+  mat.roughness = 0.5;
   mat.metalness = 0.0;
   mat.transparent = true;
-  mat.opacity = 0.9;
+  mat.opacity = 0.92;
 
-  // World position of this surface vertex (group is at origin → local == world).
+  // World position of this surface vertex (group is at origin → local == world, so the
+  // animation stays phase-coherent across chunk seams).
   const p = positionLocal;
   const wx = p.x;
   const wz = p.z;
-
-  // --- (1) travelling ripple: two summed sines drifting +X (half on Z) like a
-  // current. Different freqs/phases on each axis so the swells interfere into a
-  // soft, non-repetitive undulation rather than a marching grid of rollers.
   const t = time;
+  // Baked radial factor: 0 at the pool centre → 1 at the marched waterline (see
+  // buildWater). Lets the shared shader know where the shore is, for the foam.
+  const shore = attribute('aShore', 'float');
+
+  // --- (1) keep a tiny travelling vertical ripple so the lit specular still wanders
+  // (subtle; the *visible* motion is the colour animation below). ---
   const w1 = sin(wx.mul(WAVE_FREQ).add(wz.mul(WAVE_FREQ * 0.6)).add(t.mul(WAVE_SPEED)));
   const w2 = sin(wx.mul(WAVE_FREQ * 1.7).sub(wz.mul(WAVE_FREQ * 0.9)).add(t.mul(WAVE_SPEED * 0.7)));
-  const lift = w1.add(w2.mul(0.5)).mul(WAVE_AMP);
-  // Displace only Y; keep x/z so the surface never shears horizontally.
-  mat.positionNode = vec3(p.x, p.y.add(lift), p.z);
+  mat.positionNode = vec3(p.x, p.y.add(w1.add(w2.mul(0.5)).mul(WAVE_AMP)), p.z);
 
-  // --- (2) scrolling sky-sheen: a slow diagonal band sweeping across the surface.
-  // Where it crests, lift the sky-blue emissive so a soft glint travels downstream.
-  // Raise to a power so the band reads as a discrete travelling highlight, not a
-  // whole-surface pulse — quiet, not busy.
-  const band = sin(wx.mul(SHEEN_FREQ).add(wz.mul(SHEEN_FREQ * 0.7)).add(t.mul(SHEEN_SPEED)))
-    .mul(0.5).add(0.5); // 0..1
-  const glint = band.mul(band).mul(band); // sharpen → a moving crest, mostly dark
-  // Base gentle sky lift (the old constant emissive) + the travelling glint on top.
+  // --- (2) DRIFTING CAUSTIC BANDS (the main "it's moving" cue) -----------------
+  // Two crossing travelling sine fields interfere into bright/dark patches that slide
+  // across the surface. Squared so the bright crests read as discrete moving glints on
+  // a darker body rather than a uniform pulse. This is pure colour — visible even when
+  // the disc is geometrically flat and far away.
+  const cA = sin(wx.mul(CAUSTIC_FREQ_A).add(wz.mul(CAUSTIC_FREQ_A * 0.7)).add(t.mul(CAUSTIC_SPEED)));
+  const cB = sin(wx.mul(CAUSTIC_FREQ_B).sub(wz.mul(CAUSTIC_FREQ_B * 1.3)).add(t.mul(CAUSTIC_SPEED * 0.6)));
+  const causticRaw = cA.add(cB).mul(0.25).add(0.5); // 0..1 moving field
+  const caustic = causticRaw.mul(causticRaw); // sharpen the crests
+
+  // --- (3) SHORE FOAM — a pale lip that LAPS in and out at the waterline ---------
+  // A short-wavelength band travelling along the surface, gated hard to the rim by the
+  // baked shore factor, squared for a frothy crest. Reads as water breaking on shore.
+  const lap = sin(wx.mul(FOAM_FREQ).add(wz.mul(FOAM_FREQ * 1.1)).sub(t.mul(FOAM_SPEED)))
+    .mul(0.5).add(0.5);
+  const lap2 = sin(wx.mul(FOAM_FREQ * 0.6).sub(wz.mul(FOAM_FREQ * 0.8)).sub(t.mul(FOAM_SPEED * 0.7)))
+    .mul(0.5).add(0.5);
+  const rim = smoothstep(float(0.55), float(1.0), shore); // only near the waterline
+  const foam = clamp(lap.mul(lap2).mul(rim).mul(FOAM_STRENGTH), float(0.0), float(1.0));
+
+  // --- compose the surface colour ---------------------------------------------
+  const base = vertexColor().rgb; // baked deep→shallow gradient
+  const skyBright = vec3(palette.waterShallow.r, palette.waterShallow.g, palette.waterShallow.b);
+  const foamCol = vec3(FOAM.r, FOAM.g, FOAM.b);
+  // lighten toward sky-blue where the caustics crest, then lay the white foam on top
+  let color = mix(base, skyBright, caustic.mul(CAUSTIC_STRENGTH));
+  color = mix(color, foamCol, foam);
+  mat.colorNode = color;
+
+  // emissive: a gentle constant sky lift + a touch riding the caustic crests and the
+  // foam, so both the drifting glints and the breaking foam stay bright through the
+  // lighting/grade (added after lighting → guaranteed to read as motion).
   const sky = vec3(palette.skyHorizon.r, palette.skyHorizon.g, palette.skyHorizon.b);
-  mat.emissiveNode = sky.mul(float(0.32).add(glint.mul(SHEEN_LIFT)));
+  mat.emissiveNode = sky.mul(float(0.26).add(caustic.mul(0.16))).add(foamCol.mul(foam.mul(0.45)));
 
   return mat;
 }
@@ -211,11 +253,15 @@ export function buildWater(
   const vcount = 1 + SEG * 3;
   const pos = new Float32Array(vcount * 3);
   const col = new Float32Array(vcount * 3);
+  // Per-vertex shore factor (0 at the centre → 1 at the marched waterline). Read by
+  // makeWaterMaterial to lap animated foam onto exactly the rim, in the shared shader.
+  const shoreF = new Float32Array(vcount);
 
   // centre: deepest, coolest, with a faint warm sun-kiss so it doesn't read flat.
   _col.copy(palette.waterDeep).lerp(palette.waterShallow, 0.1).lerp(palette.sun, 0.04);
   pos[0] = bestX; pos[1] = level; pos[2] = bestZ;
   col[0] = _col.r; col[1] = _col.g; col[2] = _col.b;
+  shoreF[0] = 0; // centre
 
   // Sky tone the thin rim "drinks" via a Fresnel-style brightening — a still tarn
   // at a grazing angle mirrors the luminous pale-blue horizon, lifting the edge.
@@ -240,6 +286,7 @@ export function buildWater(
       _col.copy(palette.waterDeep).lerp(palette.waterShallow, 0.2 + f * 0.22 + sheen * 0.18);
       if (glint > 0.5) _col.lerp(palette.waterShallow, (glint - 0.5) * 0.5);
       col[idx] = _col.r; col[idx + 1] = _col.g; col[idx + 2] = _col.b;
+      shoreF[1 + k * SEG + s] = f; // radial fraction → shore factor for this ring
     }
 
     // --- shore ring (the marched waterline): pale sun-skimmed shallow + sky rim ---
@@ -253,6 +300,7 @@ export function buildWater(
     _col.lerp(_sky, fres * 0.4);
     if (glint > 0.45) _col.lerp(palette.waterShallow, (glint - 0.45) * 0.6);
     col[sIdx] = _col.r; col[sIdx + 1] = _col.g; col[sIdx + 2] = _col.b;
+    shoreF[1 + 2 * SEG + s] = 1.0; // the marched waterline → full shore factor (foam laps here)
   }
 
   // Index: an inner fan (centre→inner ring) plus two ring bands (inner→mid→shore),
@@ -277,6 +325,7 @@ export function buildWater(
   const surfaceGeo = new THREE.BufferGeometry();
   surfaceGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   surfaceGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  surfaceGeo.setAttribute('aShore', new THREE.BufferAttribute(shoreF, 1));
   surfaceGeo.setIndex(new THREE.BufferAttribute(index, 1));
   surfaceGeo.computeVertexNormals(); // mostly-up with a soft varied tilt → calm sheen
   surfaceGeo.computeBoundingSphere();
