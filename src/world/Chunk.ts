@@ -203,12 +203,22 @@ export class Chunk {
           // A mild clump-to-clump dip for life — never the near-black it used to crush to.
           if (rnd() < 0.14) { l -= 0.05; }
           cc.setHSL(h, THREE.MathUtils.clamp(s, 0, 1), THREE.MathUtils.clamp(l, 0.22, 0.95)); // varied ground tone, off black
-          // Bigger, blade-ish dabs so the carpet reads densely planted (less bare
-          // ground showing through), a minority taller and upright.
-          scale = 1.0 + rnd() * 1.1;
-          aspect = rnd() < 0.4 ? 1.3 + rnd() * 0.9 : 0.9 + rnd() * 0.3;
-          yoff = 0.5 + rnd() * 1.1;
-          wind = 0.4 + rnd() * 0.15;
+          // Mostly round-ish turf dabs, but a fraction stand up as STRAY GRASS —
+          // tall thin OVAL blades poking out of the carpet (same painterly stamp,
+          // just elongated + upright; the wind wobble sways them like real grass).
+          // Reshapes existing dabs, so no extra instances.
+          if (rnd() < 0.16) {
+            scale = 0.42 + rnd() * 0.38; // narrow
+            aspect = 2.6 + rnd() * 2.0; // tall thin oval = a blade
+            angle = 0; // upright; the wind wobble sways it
+            yoff = 1.0 + rnd() * 2.2; // rises out of the turf
+            wind = 0.5 + rnd() * 0.25; // sways a touch more
+          } else {
+            scale = 1.0 + rnd() * 1.1;
+            aspect = rnd() < 0.4 ? 1.3 + rnd() * 0.9 : 0.9 + rnd() * 0.3;
+            yoff = 0.5 + rnd() * 1.1;
+            wind = 0.4 + rnd() * 0.15;
+          }
         }
       } else if (watery) {
         // Calm water surface of the stream channel. mixColor now paints the channel
