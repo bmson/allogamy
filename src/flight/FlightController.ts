@@ -31,6 +31,14 @@ export class FlightController {
   private tmp2 = new THREE.Vector3();
   /** Eased lateral camera swing — slides out to a profile view through turns. */
   private swing = 0;
+  /** Smoothed turn rate (yaw velocity), used to lead the framing into a turn. */
+  private turnLead = 0;
+  /** Smoothed pitch, drives a subtle dolly/FOV speed cue on dives & climbs. */
+  private speedCue = 0;
+  /** Eased FOV so the dive widening / climb easing never snaps. */
+  private fov = 0;
+  /** Free-running clock for the gentle idle breathing. */
+  private clock = 0;
 
   constructor(camera: THREE.PerspectiveCamera, source: ControlSource, field: TerrainField) {
     this.camera = camera;
@@ -80,6 +88,7 @@ export class FlightController {
     }
     if (this.position.y > 920) this.position.y = 920;
 
+    this.clock += dt;
     this.updateCamera(dt);
   }
 
@@ -99,9 +108,32 @@ export class FlightController {
     const s = this.swing;
     const a = Math.min(1, Math.abs(s));
 
-    const lateral = s * 18; // how far around to the side
-    const backDist = 16 - a * 7; // pull in as we come around so the bird stays framed
-    const rise = 9 - a * 2.5; // drop a touch for a flatter, more dramatic angle
+    // ANTICIPATION: the bank itself (which leads the actual yaw) feeds a slowly
+    // eased "turn lead". It rises a touch faster than it settles so the framing
+    // commits into a turn just before the heading swings, then unwinds gently.
+    const leadTarget = this.roll / MAX_ROLL;
+    const leadEase = leadTarget * leadTarget > this.turnLead * this.turnLead ? 2.4 : 1.5;
+    this.turnLead += (leadTarget - this.turnLead) * (1 - Math.exp(-dt * leadEase));
+
+    // SPEED CUE: smoothed pitch. A dive (pitch < 0) eases the camera back and
+    // widens the lens a hair for a sense of rushing speed; a climb pulls in and
+    // narrows slightly. Heavily smoothed so it breathes rather than pumps.
+    this.speedCue += (this.pitch / MAX_PITCH - this.speedCue) * (1 - Math.exp(-dt * 1.4));
+    const dive = Math.max(0, -this.speedCue); // 0..1 on dives only
+    const climb = Math.max(0, this.speedCue); // 0..1 on climbs only
+
+    // IDLE BREATH: a near-imperceptible bob/drift so the rig feels alive even in
+    // dead-level straight flight. Faded out as the bird manoeuvres so it never
+    // fights the deliberate swing/lean. Two slightly detuned sines avoid an
+    // obvious loop.
+    const calm = 1 - Math.max(a, Math.abs(this.speedCue));
+    const breath = calm * 0.65;
+    const bob = Math.sin(this.clock * 0.62) * 0.9 * breath;
+    const sway = Math.sin(this.clock * 0.41 + 1.3) * 0.7 * breath;
+
+    const lateral = s * 18 + sway; // how far around to the side
+    const backDist = 16 - a * 7 + dive * 5 - climb * 2.5; // dolly back on dives, in on climbs
+    const rise = 9 - a * 2.5 + bob; // drop a touch for a flatter, more dramatic angle
 
     this.camPos.copy(this.position)
       .addScaledVector(back, backDist)
@@ -110,11 +142,25 @@ export class FlightController {
     const k = 1 - Math.exp(-dt * 3.6);
     this.camera.position.lerp(this.camPos, k);
 
-    // Aim closer to the bird as we swing aside so it stays centred in frame.
+    // Aim closer to the bird as we swing aside so it stays centred in frame, and
+    // LEAD the look target sideways toward where the bird is turning so the frame
+    // anticipates the new heading rather than chasing it.
     const ahead = 18 - a * 11;
-    this.lookTarget.copy(this.position).addScaledVector(this.forward, ahead);
+    this.lookTarget.copy(this.position)
+      .addScaledVector(this.forward, ahead)
+      .addScaledVector(side, this.turnLead * 7);
     this.camera.up.copy(UP);
     this.camera.lookAt(this.lookTarget);
+
+    // SPEED FOV: widen on a dive, ease slightly tighter on a climb — eased on its
+    // own line so it can never snap. Base FOV is whatever the camera was built with.
+    const fovTarget = dive * 6 - climb * 2;
+    this.fov += (fovTarget - this.fov) * (1 - Math.exp(-dt * 2.0));
+    const baseFov = (this.camera as THREE.PerspectiveCamera & { baseFov?: number }).baseFov
+      ?? ((this.camera as THREE.PerspectiveCamera & { baseFov?: number }).baseFov = this.camera.fov);
+    this.camera.fov = baseFov + this.fov;
+    this.camera.updateProjectionMatrix();
+
     // Lean the camera into the bank for that swooping feel.
     this.camera.rotateZ(this.roll * 0.5);
   }
