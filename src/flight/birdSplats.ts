@@ -89,9 +89,11 @@ function sampleGeometry(
   bindMatrix: THREE.Matrix4,
   clusters: Map<number, Cluster>,
   rng: () => number,
+  scaleMul: number,
 ): void {
   const pos = geo.attributes.position.array as ArrayLike<number>;
   const col = (geo.attributes.color?.array ?? null) as ArrayLike<number> | null;
+  const nor = (geo.attributes.normal?.array ?? null) as ArrayLike<number> | null;
   const si = geo.attributes.skinIndex.array as ArrayLike<number>;
   const sw = geo.attributes.skinWeight.array as ArrayLike<number>;
   const index = geo.index;
@@ -150,14 +152,35 @@ function sampleGeometry(
       let cl = clusters.get(bone);
       if (!cl) { cl = newCluster(); clusters.set(bone, cl); }
       cl.centers.push(p.x, p.y, p.z);
-      // size: small, jittered per dab; shrunk further across the bill-fade transition
-      // so the few dabs near the bill base taper away rather than ending in a hard line.
-      cl.scales.push(DAB_SCALE * (0.55 + 0.45 * billShrink) * (1 + (rng() * 2 - 1) * DAB_SIZE_JITTER));
+      // REGION-AWARE SIZE. The big soft dabs read beautifully on the broad body mass,
+      // but on the slim neck/head and the thin wing membranes they overshoot the form
+      // and blob the silhouette. Taper the dab size toward the head (z past the neck
+      // root ~0.7) so the face/crown stays crisp, and apply the per-source `scaleMul`
+      // (wings pass <1) so the membranes carry finer strokes whose trailing edges stay
+      // sharp. Combined with the existing bill-fade shrink.
+      let regionShrink = 1;
+      if (localZ > 0.7) regionShrink = Math.max(0.6, 1 - (localZ - 0.7) * 0.55);
+      cl.scales.push(
+        DAB_SCALE * scaleMul * regionShrink
+        * (0.55 + 0.45 * billShrink)
+        * (1 + (rng() * 2 - 1) * DAB_SIZE_JITTER),
+      );
       // colour: sampled vertex colour (already palette-mixed) + tiny per-dab jitter so
       // the coat shimmers in temperature like the meadow's broken colour, never flat.
-      const cr = col ? col[corner * 3] : 0.85;
-      const cg = col ? col[corner * 3 + 1] : 0.86;
-      const cb = col ? col[corner * 3 + 2] : 0.88;
+      let cr = col ? col[corner * 3] : 0.85;
+      let cg = col ? col[corner * 3 + 1] : 0.86;
+      let cb = col ? col[corner * 3 + 2] : 0.88;
+      // ENVIRONMENTAL COLOUR BLEED — the single biggest "sits-in-the-scene" cue for an
+      // up-close subject in plein-air light. A real pale bird is not lit by a neutral
+      // studio: its UPPER surfaces catch warm sky/sun, its UNDERSIDES catch a cool green
+      // bounce off the meadow below. Read the vertex normal's up/down facing and tint the
+      // dab toward a warm key (top) or a soft meadow-green (underside) — subtly, so the
+      // plumage keeps its pearl identity but is unmistakably lit BY this landscape.
+      const ny = nor ? nor[corner * 3 + 1] : 0;
+      const up = Math.max(0, ny), down = Math.max(0, -ny);
+      const ut = up * 0.07, dt = down * 0.1; // warm-sky / cool-meadow bleed strengths
+      cr = cr * (1 - ut) + 1.0 * ut; cg = cg * (1 - ut) + 0.95 * ut; cb = cb * (1 - ut) + 0.82 * ut;
+      cr = cr * (1 - dt) + 0.55 * dt; cg = cg * (1 - dt) + 0.66 * dt; cb = cb * (1 - dt) + 0.43 * dt;
       // OPAQUE broken-colour dabs: each dab is a SOLID flat patch in a different SHADE
       // of the sampled hue — some darker, some lighter — so the coat reads as hand-laid
       // paint marks (varied tones) rather than transparent specks. A small warm↔cool
@@ -275,6 +298,8 @@ export interface CoatSource {
   boneInverses: THREE.Matrix4[]; // skeleton.boneInverses (bind-world → bone-local)
   bindMatrix: THREE.Matrix4;     // the skinned mesh's bind matrix (geom → bind-world)
   bones: THREE.Bone[];           // skeleton.bones, indexed by skinIndex
+  scaleMul?: number;             // per-source dab-size multiplier (wings pass <1 so their
+  //                                thin membranes carry finer strokes; default 1 for the body)
 }
 
 /**
@@ -292,7 +317,7 @@ export function buildBirdSplatCoat(sources: CoatSource[]): THREE.Mesh[] {
   for (const src of sources) {
     // gather this source's dabs grouped by bone
     const clusters = new Map<number, Cluster>();
-    sampleGeometry(src.geo, src.boneInverses, src.bindMatrix, clusters, rng);
+    sampleGeometry(src.geo, src.boneInverses, src.bindMatrix, clusters, rng, src.scaleMul ?? 1);
     for (const [boneIdx, cl] of clusters) {
       if (cl.scales.length === 0) continue;
       const bone = src.bones[boneIdx];
