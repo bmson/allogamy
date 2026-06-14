@@ -108,20 +108,20 @@ function foliageColor(rnd: () => number, type: TreeType, lit: number, warmth = 0
     // the wood as the deepest masses, lit tips lift a little toward teal-green.
     h = 0.35 - lit * 0.04 - warmth * 0.03 + (rnd() - 0.5) * 0.03; // deep earthy spruce
     s = 0.46 + (1 - lit) * 0.12 + rnd() * 0.06;
-    l = 0.16 + lit * 0.32 + (rnd() - 0.5) * 0.05; // deepest, darkest masses
+    l = 0.14 + lit * 0.30 + (rnd() - 0.5) * 0.05; // deepest, darkest masses (a shade darker)
   } else if (type === 'bush') {
     // warmer, brighter yellow-greens for low foliage catching light — but pulled a
     // touch deeper/cooler than before so even ground cover separates from turf.
     h = 0.29 - lit * 0.05 - warmth * 0.04 + (rnd() - 0.5) * 0.07; // warm earthy + per-leaf jitter
     s = 0.48 + (1 - lit) * 0.1 + (rnd() - 0.5) * 0.12;
-    l = 0.22 + lit * 0.32 + warmth * 0.02 + (rnd() - 0.5) * 0.12; // darker than the lighter grass
+    l = 0.19 + lit * 0.30 + warmth * 0.02 + (rnd() - 0.5) * 0.12; // a shade darker than the grass
   } else {
     // broadleaf: deep cool emerald in shade → richer green crowns in sun, swung by
     // per-tree warmth across emerald (cool) ↔ chartreuse ↔ the odd golden turning
     // tree. Base hue sits cooler (~0.36) and lightness lower than the turf for pop.
     h = 0.31 - lit * 0.04 - warmth * 0.15 + (rnd() - 0.5) * 0.09; // per-tree hue swing + wide per-LEAF hue jitter
     s = 0.46 + (1 - lit) * 0.1 + warmth * 0.1 + (rnd() - 0.5) * 0.16; // per-leaf saturation variety
-    l = 0.20 + lit * 0.34 + warmth * 0.09 + (rnd() - 0.5) * 0.16; // DARK canopies — darker than the lighter grass
+    l = 0.17 + lit * 0.32 + warmth * 0.09 + (rnd() - 0.5) * 0.16; // a shade DARKER canopies (darker than grass)
   }
   // Golden-turning override (broadleaf/bush only): blend the whole dab toward a
   // warm autumn ochre as `golden` rises, so a handful of trees clearly turn.
