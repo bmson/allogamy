@@ -40,11 +40,15 @@ import {
 // units, pre-SCALE). DAB_SCALE is the dab half-size in those same local units. A
 // light coat: enough overlap to soften edges + shimmer, sparse enough that the solid
 // pelican reads clearly through it.
-const DENSITY = 1500;       // dabs per unit² of source surface area (dense → strokes overlap into a coat)
-const DAB_SCALE = 0.2;      // dab world half-size — flat brush strokes, not fine wool
+const DENSITY = 1050;       // dabs per unit² — dense enough that the soft-feathered marks
+//                             BLEND into a continuous painted surface (like the meadow),
+//                             not sparse opaque patches.
+const DAB_SCALE = 0.155;    // dab world half-size — kept small so dabs sit as brush marks
+//                             ON the form and don't puff off the silhouette into fuzz.
 const DAB_ASPECT = 2.0;     // elongate each dab into an oval STROKE (like the meadow splats), not a circle
-const DAB_SIZE_JITTER = 0.4; // ± fraction of per-dab size variation
-const COAT_OPACITY = 1.0;   // opaque dabs (cut to a solid stamp by alphaTest)
+const DAB_SIZE_JITTER = 0.35; // ± fraction of per-dab size variation
+const COAT_OPACITY = 0.9;   // near-opaque CORE with a soft feathered RIM that blends, so the
+//                             surface reads as one painted skin (not see-through, not foam).
 const SHIMMER = 0.16;       // faint animated dab wobble amplitude (NOT wind sway)
 const SEED = 0x9e3779b9;
 
@@ -114,6 +118,16 @@ function sampleGeometry(
         a.y * w0 + b.y * w1 + c.y * w2,
         a.z * w0 + b.z * w1 + c.z * w2,
       );
+      // BILL FADE: `p` is still in bird-local space (nose +Z; the bill runs z≈1.2→2.1).
+      // The pelican's signature bill must read SMOOTH, not foamed — so we fade the coat
+      // out across the forehead (z~1.05) and place NO dabs on the bill proper (z>1.22).
+      const localZ = p.z;
+      if (localZ > 1.22) continue; // bare smooth bill
+      let billShrink = 1;
+      if (localZ > 1.05) {
+        billShrink = Math.max(0, 1 - (localZ - 1.05) / 0.17); // 1 at the forehead → 0 at the bill base
+        if (rng() > billShrink) continue; // thin the dabs out approaching the bill
+      }
       // dominant bone = the source vertex (of this triangle's corners) with the
       // single largest skin weight. Picking per-vertex (not per-interpolated) keeps
       // a clean integer bone choice; the nearest corner by barycentric weight wins
@@ -130,8 +144,9 @@ function sampleGeometry(
       let cl = clusters.get(bone);
       if (!cl) { cl = newCluster(); clusters.set(bone, cl); }
       cl.centers.push(p.x, p.y, p.z);
-      // size: small, jittered per dab
-      cl.scales.push(DAB_SCALE * (1 + (rng() * 2 - 1) * DAB_SIZE_JITTER));
+      // size: small, jittered per dab; shrunk further across the bill-fade transition
+      // so the few dabs near the bill base taper away rather than ending in a hard line.
+      cl.scales.push(DAB_SCALE * (0.55 + 0.45 * billShrink) * (1 + (rng() * 2 - 1) * DAB_SIZE_JITTER));
       // colour: sampled vertex colour (already palette-mixed) + tiny per-dab jitter so
       // the coat shimmers in temperature like the meadow's broken colour, never flat.
       const cr = col ? col[corner * 3] : 0.85;
@@ -169,13 +184,14 @@ const QUAD = {
 function makeCoatMaterial(): THREE.MeshBasicNodeMaterial {
   const mat = new THREE.MeshBasicNodeMaterial();
   mat.fog = false;
-  // OPAQUE dabs (not transparent): each quad is a solid paint stamp, its round shape
-  // cut by alphaTest and its depth written, so overlapping dabs occlude cleanly into a
-  // solid coat of varied-shade marks — no see-through blending.
-  mat.transparent = false;
+  // Like the meadow splats: near-opaque CORES that write depth (so the coat self-occludes
+  // and isn't see-through), with soft FEATHERED RIMS that blend — so dense overlapping
+  // marks melt into one continuous painted skin instead of reading as separate patches or
+  // foam. alphaTest discards the empty outer rim so the cores still lay down clean depth.
+  mat.transparent = true;
   mat.depthWrite = true;
   mat.depthTest = true;
-  mat.alphaTest = 0.42; // cut the dab to a solid stamp, leaving a hair of feathered rim
+  mat.alphaTest = 0.34; // discard the faint outer rim → soft feathered overlap, cores blend
 
   const aCenter = attribute('aCenter', 'vec3');
   const aScale = attribute('aScale', 'float');
@@ -206,10 +222,9 @@ function makeCoatMaterial(): THREE.MeshBasicNodeMaterial {
     sin(r.y.mul(6.0).floor().mul(127.1).add(seed.mul(91.0).floor().mul(311.7))).mul(43758.5453),
   );
   const d = r.dot(r).mul(float(1.0).add(bristle.sub(0.5).mul(0.2)));
-  // Opaque round stamp: ~1 across the dab body, dropping sharply at the rim where
-  // alphaTest (0.5) clips it to a clean solid mark. COAT_OPACITY scales it so the
-  // edge clip radius is tunable while the core stays fully opaque.
-  mat.opacityNode = smoothstep(float(1.0), float(0.78), d).mul(COAT_OPACITY);
+  // Soft feathered gaussian (meadow-matched): opaque core melting to a wide blended rim,
+  // so dense marks fuse into a painted surface. alphaTest culls the empty rim (d≳1).
+  mat.opacityNode = smoothstep(float(1.0), float(0.45), d).mul(COAT_OPACITY);
 
   // loaded-brush tooth (rides the colour, fades to the rim) — same as the meadow.
   const streak = sin(r.x.mul(9.0).add(seed.mul(6.2831)));
