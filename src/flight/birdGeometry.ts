@@ -265,8 +265,37 @@ const S = (
   bone: number, blend = 0, flatten = 0,
 ): Station => ({ p, rx, ry, yOff, bone, blend, flatten });
 
-// The body spine. Tuned so the neck folds back in the soaring pelican "S" and the
-// bill droops off the head — all as ONE curve. Radii ease continuously.
+// ===========================================================================
+// DECOMPOSED ANATOMY (the architecture the user asked for).
+//
+// The creature is no longer ONE master sweep. It is now FOUR purpose-built pieces,
+// each worrying only about itself, then merged into one skinned mesh (one draw
+// call, one material) and painted as a continuous surface so colour flows across
+// the joins. Each piece BURIES its capped end inside the next so no seam shows:
+//
+//   BODY  — tail → rump → belly → breast → shoulder, STOPPING at the neck root.
+//           Its front tapers DOWN to ~the neck's base radius so its end-cap is
+//           small and hides inside the neck root (no flat collar around the slim
+//           neck).                                            (bodySpine + sweep)
+//   NECK  — a SEPARATE narrow tube along the pelican S-fold. Laterally NARROW
+//           (small rx → slim head-on) but vertically DEEP (larger ry → full in
+//           profile). Bottom buries in the body shoulder; top buries in the head.
+//                                                              (buildNeckTube)
+//   HEAD  — its OWN rounded ovoid (a real skull, not a boxy sweep cap). The neck
+//           top and the bill base both bury into it.           (buildHeadSphere)
+//   BILL  — the long deep pelican bill grown FORWARD out of the head ovoid; the
+//           gular pouch (buildLowerJawSkin, preserved) hangs below.   (buildBill)
+//
+// Shared anatomy anchors so the pieces agree on where they meet.
+// ===========================================================================
+const NECK_ROOT = new THREE.Vector3(0, 0.195, 0.69); // body front-cap centre, buried in neck base
+const HEAD_CENTRE = new THREE.Vector3(0, 0.445, 0.99); // centre of the head ovoid
+const HEAD_RX = 0.092, HEAD_RY = 0.10, HEAD_RZ = 0.108; // head ovoid radii (rounded skull)
+const BILL_BASE_Z = 1.05; // bill grows from the head ovoid forward of here
+
+// The body spine — BODY ONLY now (tail → rump → belly → breast → shoulder). It
+// STOPS at the neck root and its front rings taper down toward the neck's base
+// radius, so the small end-cap buries inside the neck base with no collar showing.
 function bodySpine(): Station[] {
   return [
     // ---- tail (grows straight out of the rump, low and trailing) ----
@@ -283,52 +312,15 @@ function bodySpine(): Station[] {
     S(new THREE.Vector3(0, -0.01, -0.5), 0.162, 0.215, 0.4, BONE.BODY),
     S(new THREE.Vector3(0, -0.02, -0.12), 0.192, 0.262, 0.48, BONE.BODY), // heaviest belly
     S(new THREE.Vector3(0, 0.0, 0.22), 0.176, 0.238, 0.42, BONE.BODY), // breast
-    S(new THREE.Vector3(0, 0.07, 0.52), 0.122, 0.17, 0.26, BONE.BODY, 0.4),
-    S(new THREE.Vector3(0, 0.16, 0.72), 0.08, 0.102, 0.12, BONE.BODY, 1.0), // shoulder / neck root
-    // ---- S-neck: the PELICAN flight FOLD. A pelican does NOT carry its head high on a
-    // vertical goose-neck — it draws the head BACK and LOW so it rests near the shoulders,
-    // the neck folded into a compact S, with the heavy bill held forward roughly level.
-    // These stations lift a little off the shoulders, arch BACK at the fold crown, then
-    // sweep forward & DOWN so the head sits LOW (y≈0.43) and drawn-in. Smooth Catmull
-    // stations → the welded skin folds without a kink, and the head is no longer a tall
-    // vertical "can". The radii also TAPER (slim neck) so it reads as a neck, not a tube.
-    // The neck is a SLIM, round column that TAPERS so the head reads as a distinct
-    // bulb — a thick tube made the neck as wide as the head, which looked headless.
-    // A round (rx≈ry) section bends in a soft loop, so the fold no longer reads square.
-    // The neck is LATERALLY NARROW (small rx → slim from the front) but keeps vertical
-    // DEPTH (larger ry → still reads full in side profile). A pelican's neck is a thin
-    // blade from the front, not a fat round tube; rx≈ry made it look wide head-on.
-    S(new THREE.Vector3(0, 0.30, 0.70), 0.052, 0.078, 0.05, BONE.NECK0, 0.6),
-    S(new THREE.Vector3(0, 0.41, 0.66), 0.040, 0.066, 0.0, BONE.NECK1, 0.5),
-    S(new THREE.Vector3(0, 0.455, 0.635), 0.034, 0.060, 0.0, BONE.NECK1, 1.0), // fold crown (narrow)
-    S(new THREE.Vector3(0, 0.45, 0.70), 0.032, 0.058, 0.0, BONE.NECK2, 0.6),   // sweeping forward
-    S(new THREE.Vector3(0, 0.44, 0.78), 0.034, 0.060, 0.0, BONE.NECK3, 0.6),
-    S(new THREE.Vector3(0, 0.435, 0.85), 0.042, 0.066, 0.0, BONE.NECK3, 1.0),  // nape — slim front, full side
-    // ---- head: a DISTINCT round bulb, clearly fuller than the slim neck. Built nearly
-    // spherical (rx≈ry) so it reads as a rounded skull, not a boxy block, then ramps
-    // down through the forehead into the bill base. The back of the head swells up out
-    // of the narrow nape (a real head, not a continuation of the neck tube). ----
-    S(new THREE.Vector3(0, 0.436, 0.91), 0.088, 0.092, 0.0, BONE.HEAD, 0.3),
-    S(new THREE.Vector3(0, 0.445, 0.99), 0.100, 0.102, 0.0, BONE.HEAD), // crown bulb (round, > neck)
-    S(new THREE.Vector3(0, 0.439, 1.07), 0.090, 0.090, 0.0, BONE.HEAD),
-    // GRADUAL forehead taper (extra station): the crown→bill radius drop was steep
-    // enough to throw a little up-fin/saddle at the bill base; easing it over two
-    // stations lets the culmen run smoothly off the skull.
-    S(new THREE.Vector3(0, 0.428, 1.145), 0.074, 0.070, 0.0, BONE.HEAD),
-    S(new THREE.Vector3(0, 0.418, 1.20), 0.062, 0.056, 0.0, BONE.HEAD, 0.3), // bill base
-    // ---- bill: the PELICAN's signature — a LONG, deep, broad-lens bill carried
-    // nearly straight forward (only a gentle droop), much longer than a gull/goose.
-    // Extended tip 1.66 → 2.12 and held wider along its length (slower taper) so it
-    // reads as the massive pelican bill. The lower-jaw closure table in
-    // buildLowerJawSkin is matched to these z/y so the beak still shuts (no gap).
-    // Less FLATTEN than before: a paper-flat lens reads as a tilted twisting ribbon
-    // from the side. A bill with real vertical depth (rounder section) reads as a
-    // solid bar in profile; the deep gular pouch below supplies the pelican bulk.
-    S(new THREE.Vector3(0, 0.41, 1.24), 0.052, 0.048, 0.0, BONE.HEAD, 0.4, 0.0),
-    S(new THREE.Vector3(0, 0.392, 1.46), 0.046, 0.038, 0.0, BONE.HEAD, 1.0, 0.0),
-    S(new THREE.Vector3(0, 0.374, 1.7), 0.04, 0.030, 0.0, BONE.HEAD, 1.0, 0.0),
-    S(new THREE.Vector3(0, 0.356, 1.94), 0.028, 0.022, 0.0, BONE.HEAD, 1.0, 0.0),
-    S(new THREE.Vector3(0, 0.330, 2.12), 0.012, 0.016, 0.0, BONE.HEAD, 1.0, 0.0), // hooked nail (droops)
+    S(new THREE.Vector3(0, 0.07, 0.5), 0.13, 0.182, 0.28, BONE.BODY),
+    // ---- shoulder → neck root: the body's FRONT now tapers down toward the neck's
+    // base radius and curves UP to the neck-root anchor, so the small front cap
+    // sinks INSIDE the neck base (no flat disc / collar around the slim neck). The
+    // last couple of rings carry a little NECK0 weight so the shoulder flexes with
+    // the neck base instead of shearing at the join. ----
+    S(new THREE.Vector3(0, 0.13, 0.66), 0.095, 0.122, 0.16, BONE.BODY, 0.25),
+    S(new THREE.Vector3(0, 0.17, 0.71), 0.07, 0.086, 0.06, BONE.NECK0, 0.0), // shoulder shelf, neck-weighted
+    S(NECK_ROOT.clone(), 0.05, 0.062, 0.0, BONE.NECK0, 0.0), // small front cap, buried in neck base
   ];
 }
 
@@ -359,35 +351,30 @@ function sweepBodySkin(stations: Station[]): SweptSkin {
     const t = i / (n - 1);
     tan.push(curve.getTangentAt(clamp01(t)).normalize());
   }
-  // FIXED-UP frames. Parallel transport keeps a frame continuous but lets it
-  // ACCUMULATE ROLL along the path — and the climb up the vertical S-neck rolled the
-  // frame so far that by the bill the flattened/teardrop section was laid on a TILT
-  // and read as a twisting ribbon from the side. Instead we anchor every ring's "up"
-  // to WORLD-UP (projected perpendicular to the tangent), so the frame never drifts:
-  // the body and the bill both resolve to up≈+Y and the flat bill stays level. Where
-  // the tangent goes near-vertical (the neck cresting the fold) world-up degenerates,
-  // so we CARRY the previous ring's up through that short stretch — those rings are
-  // round, hence roll-invariant, so no seam shows.
+  // parallel-transport frames
   const normals: THREE.Vector3[] = [];
   const binormals: THREE.Vector3[] = [];
-  const UPREF = new THREE.Vector3(0, 1, 0);
-  let prevN = new THREE.Vector3(0, 1, 0);
+  let nrm = new THREE.Vector3(0, 1, 0);
+  if (Math.abs(tan[0].dot(nrm)) > 0.92) nrm.set(1, 0, 0);
+  nrm.sub(tan[0].clone().multiplyScalar(tan[0].dot(nrm))).normalize();
+  const q = new THREE.Quaternion();
+  const axis = new THREE.Vector3();
   for (let i = 0; i < n; i++) {
-    const t = tan[i];
-    let nrm = UPREF.clone().sub(t.clone().multiplyScalar(t.dot(UPREF)));
-    if (nrm.lengthSq() < 0.04) {
-      // tangent ≈ vertical → world-up unusable; carry the previous up, re-orthogonalised.
-      nrm = prevN.clone().sub(t.clone().multiplyScalar(t.dot(prevN)));
-      if (nrm.lengthSq() < 1e-6) {
-        const zr = new THREE.Vector3(0, 0, 1);
-        nrm = zr.sub(t.clone().multiplyScalar(t.dot(zr)));
+    if (i > 0) {
+      axis.crossVectors(tan[i - 1], tan[i]);
+      const len = axis.length();
+      if (len > 1e-6) {
+        axis.divideScalar(len);
+        const dot = clamp01((tan[i - 1].dot(tan[i]) + 1) / 2) * 2 - 1;
+        const ang = Math.acos(dot);
+        q.setFromAxisAngle(axis, ang);
+        nrm.applyQuaternion(q);
       }
+      nrm.sub(tan[i].clone().multiplyScalar(tan[i].dot(nrm))).normalize();
     }
-    nrm.normalize();
-    const bin = new THREE.Vector3().crossVectors(t, nrm).normalize();
+    const bin = new THREE.Vector3().crossVectors(tan[i], nrm).normalize();
     normals.push(nrm.clone());
     binormals.push(bin);
-    prevN = nrm;
   }
 
   const verts: number[] = [];
@@ -454,32 +441,258 @@ function sweepBodySkin(stations: Station[]): SweptSkin {
   g.setIndex(idx);
   g.computeVertexNormals();
 
-  // Bone rest anchors = each bone's PIVOT point. These only set where a bone
-  // rotates/scales from (the rest inverse cancels the offset for the undeformed
-  // skin), so we choose anatomically sensible pivots rather than the first tagged
-  // ring: torso pivots at the belly centre, tail at the rump (so it swings like a
-  // rudder from the body, not from its own tip), neck/head/jaw at their joints.
+  return { geo: g, boneRest: boneRestAnchors() };
+}
+
+// ---------------------------------------------------------------------------
+// Shared bone-rest pivots. Each bone's PIVOT point (where it rotates/scales from;
+// the rest inverse cancels the offset for the undeformed skin). Shared by every
+// piece so the body, neck, head and bill all bind to the SAME skeleton. The neck
+// pivots are read straight off the neck S-spline so the bones sit on the fold.
+// ---------------------------------------------------------------------------
+function boneRestAnchors(): THREE.Vector3[] {
+  const neck = neckSpine();
   const boneRest: THREE.Vector3[] = new Array(BONE.COUNT);
   // The tail bone pivots at the actual rump joint — where body flesh meets the
   // fan root — so the whole rump+fan swings from the body and never detaches.
   boneRest[BONE.TAIL] = new THREE.Vector3(0, 0.045, -0.86); // rump joint (at the fan root)
   boneRest[BONE.BODY] = new THREE.Vector3(0, -0.02, -0.12); // belly centre
-  // Pivots follow the new FOLDED pelican neck (low, drawn back) so bones rotate from
-  // anatomically right joints on the folded S.
-  boneRest[BONE.NECK0] = new THREE.Vector3(0, 0.30, 0.70); // shoulder/neck root
-  boneRest[BONE.NECK1] = new THREE.Vector3(0, 0.46, 0.63); // fold crown (back)
-  boneRest[BONE.NECK2] = new THREE.Vector3(0, 0.45, 0.71);
-  boneRest[BONE.NECK3] = new THREE.Vector3(0, 0.43, 0.81);
-  boneRest[BONE.HEAD] = new THREE.Vector3(0, 0.44, 0.90); // low head joint (drawn back)
+  // Neck pivots: the joints of the folded pelican S, read from the neck spline so
+  // the bones sit exactly on the tube they bend. (4 bones over the spline points.)
+  boneRest[BONE.NECK0] = neck.point(0.06);  // shoulder/neck root
+  boneRest[BONE.NECK1] = neck.point(0.40);  // up toward the fold crown (back)
+  boneRest[BONE.NECK2] = neck.point(0.68);  // over the crown, sweeping forward
+  boneRest[BONE.NECK3] = neck.point(0.90);  // nape into the head
+  boneRest[BONE.HEAD] = HEAD_CENTRE.clone().add(new THREE.Vector3(0, -0.04, -0.06)); // nape/skull joint
   // The mandible hinges at the JAW joint UNDER the head — not out at the bill base.
-  // Seating the pivot back at the jaw ROOT (z≈0.96, up at the skull underside where
-  // the trough's buried rings live) means those root rings barely move while the jaw
-  // gapes about the hinge — they stay welded into the head underside, so the jaw can
-  // never swing free of the face and the back/root stays closed through any motion.
-  boneRest[BONE.JAW] = new THREE.Vector3(0, 0.36, 0.95); // jaw hinge (under the LOW skull)
+  // Seating the pivot back under the skull means the buried root rings barely move
+  // while the jaw gapes about the hinge — they stay welded into the head underside,
+  // so the jaw can never swing free of the face and the back/root stays closed.
+  boneRest[BONE.JAW] = new THREE.Vector3(0, 0.38, 0.98); // jaw hinge (under the skull)
   for (let b = 0; b < BONE.COUNT; b++) if (!boneRest[b]) boneRest[b] = new THREE.Vector3();
+  return boneRest;
+}
 
-  return { geo: g, boneRest };
+// ===========================================================================
+// THE NECK — a SEPARATE narrow tube swept along the pelican S-fold. Worries ONLY
+// about being a neck: laterally NARROW (small rx → slim head-on) but vertically
+// DEEP (larger ry → full in side profile). Its BOTTOM end buries inside the body
+// shoulder (overlapping the body's small front cap at NECK_ROOT); its TOP end
+// buries inside the head ovoid. Vertices are weighted NECK0..3 blended along the
+// length (and a touch of BODY at the base, HEAD at the top) so it bends with the
+// neck bones and the buried ends flex WITH the body/head they sink into.
+// ===========================================================================
+interface NeckSpline {
+  pts: THREE.Vector3[];
+  point: (t: number) => THREE.Vector3; // sample the centre-line at t∈[0,1]
+}
+function neckSpine(): NeckSpline {
+  // The folded pelican S, in profile: rises off the shoulders, arches BACK at the
+  // crown, then sweeps FORWARD and slightly down to bury into the low, drawn-back
+  // head. Kept compact (the head sits near the shoulders), not a tall goose neck.
+  const pts = [
+    new THREE.Vector3(0, 0.17, 0.70),  // root — buried in the body shoulder
+    new THREE.Vector3(0, 0.28, 0.69),
+    new THREE.Vector3(0, 0.40, 0.655), // up the back of the S
+    new THREE.Vector3(0, 0.47, 0.625), // fold crown (drawn back)
+    new THREE.Vector3(0, 0.485, 0.69), // over the crown, turning forward
+    new THREE.Vector3(0, 0.47, 0.78),  // sweeping forward & down
+    new THREE.Vector3(0, 0.45, 0.87),  // nape
+    new THREE.Vector3(0, 0.445, 0.95), // top — buried inside the head ovoid
+  ];
+  const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.5);
+  return { pts, point: (t: number) => curve.getPointAt(clamp01(t)) };
+}
+
+function buildNeckTube(): THREE.BufferGeometry {
+  const { pts } = neckSpine();
+  const n = pts.length;
+  const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.5);
+  const tan: THREE.Vector3[] = [];
+  for (let i = 0; i < n; i++) tan.push(curve.getTangentAt(clamp01(i / (n - 1))).normalize());
+  // parallel-transport frames (the S-bend twists, so transport the frame)
+  const normals: THREE.Vector3[] = [], binormals: THREE.Vector3[] = [];
+  let nrm = new THREE.Vector3(1, 0, 0); // start the lateral axis along world X
+  nrm.sub(tan[0].clone().multiplyScalar(tan[0].dot(nrm))).normalize();
+  const q = new THREE.Quaternion(), axis = new THREE.Vector3();
+  for (let i = 0; i < n; i++) {
+    if (i > 0) {
+      axis.crossVectors(tan[i - 1], tan[i]);
+      const len = axis.length();
+      if (len > 1e-6) {
+        axis.divideScalar(len);
+        q.setFromAxisAngle(axis, Math.acos(clamp01((tan[i - 1].dot(tan[i]) + 1) / 2) * 2 - 1));
+        nrm.applyQuaternion(q);
+      }
+      nrm.sub(tan[i].clone().multiplyScalar(tan[i].dot(nrm))).normalize();
+    }
+    normals.push(nrm.clone());
+    binormals.push(new THREE.Vector3().crossVectors(tan[i], nrm).normalize());
+  }
+  // map each ring to a NECK bone (blended), with BODY at the base + HEAD at the top
+  // so the buried ends flex with the part they sink into.
+  const neckBoneAt = (t: number): [number, number, number] => {
+    if (t < 0.10) return [BONE.BODY, BONE.NECK0, smoothstep(0.0, 0.10, t)]; // base buried in body
+    if (t < 0.40) return [BONE.NECK0, BONE.NECK1, smoothstep(0.10, 0.40, t)];
+    if (t < 0.66) return [BONE.NECK1, BONE.NECK2, smoothstep(0.40, 0.66, t)];
+    if (t < 0.88) return [BONE.NECK2, BONE.NECK3, smoothstep(0.66, 0.88, t)];
+    return [BONE.NECK3, BONE.HEAD, smoothstep(0.88, 1.0, t)]; // top buried in head
+  };
+  const SEGN = 22;
+  const verts: number[] = [], skinIdx: number[] = [], skinWgt: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    const c = pts[i], nA = normals[i], bA = binormals[i];
+    // a slim NECK: narrow laterally (rx), deeper vertically (ry). Both ends swell so
+    // they overlap the body shoulder / head ovoid they bury into (no thin rim).
+    const swellBase = smoothstep(0.16, 0.0, t);   // fat at the base → into the body
+    const swellTop = smoothstep(0.84, 1.0, t);    // fat at the top → into the head
+    const rx = 0.044 + 0.018 * swellBase + 0.05 * swellTop;
+    const ry = 0.062 + 0.026 * swellBase + 0.05 * swellTop;
+    const [ba, bb, wb] = neckBoneAt(t);
+    for (let s = 0; s < SEGN; s++) {
+      const a = (s / SEGN) * Math.PI * 2;
+      const ux = Math.cos(a) * rx, uy = Math.sin(a) * ry;
+      verts.push(
+        c.x + bA.x * ux + nA.x * uy,
+        c.y + bA.y * ux + nA.y * uy,
+        c.z + bA.z * ux + nA.z * uy,
+      );
+      skinIdx.push(ba, bb, 0, 0); skinWgt.push(1 - wb, wb, 0, 0);
+    }
+  }
+  const idx: number[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    const a = i * SEGN, b = (i + 1) * SEGN;
+    for (let s = 0; s < SEGN; s++) {
+      const j = (s + 1) % SEGN;
+      idx.push(a + s, a + j, b + j, a + s, b + j, b + s);
+    }
+  }
+  // cap both ends (both buried inside body / head, so caps never show)
+  for (const [end, atStart] of [[0, true], [n - 1, false]] as [number, boolean][]) {
+    const ci = verts.length / 3;
+    verts.push(pts[end].x, pts[end].y, pts[end].z);
+    const [ba, bb, wb] = neckBoneAt(end / (n - 1));
+    skinIdx.push(ba, bb, 0, 0); skinWgt.push(1 - wb, wb, 0, 0);
+    const base = end * SEGN;
+    for (let s = 0; s < SEGN; s++) {
+      if (atStart) idx.push(ci, ((s + 1) % SEGN), s);
+      else idx.push(ci, base + s, base + ((s + 1) % SEGN));
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+  g.setAttribute('skinIndex', new THREE.BufferAttribute(new Uint16Array(skinIdx), 4));
+  g.setAttribute('skinWeight', new THREE.BufferAttribute(new Float32Array(skinWgt), 4));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
+// ===========================================================================
+// THE HEAD — its OWN rounded ovoid (a real skull). A scaled UV-sphere, all
+// weighted to the HEAD bone. The neck top buries into its back/underside and the
+// bill base grows out of its front, so the ovoid reads as a clean round head set
+// off from the slim neck — exactly the pelican silhouette.
+// ===========================================================================
+function buildHeadSphere(): THREE.BufferGeometry {
+  const g = new THREE.SphereGeometry(1, 24, 18);
+  // ovoid: a touch longer fore-aft than tall, narrower across — a real skull.
+  g.scale(HEAD_RX, HEAD_RY, HEAD_RZ);
+  // flatten the crown a hair and draw the lower-rear in (where the neck buries) so
+  // the back of the skull tucks toward the nape rather than ballooning.
+  const pos = g.attributes.position.array as Float32Array;
+  for (let i = 0; i < pos.length; i += 3) {
+    const y = pos[i + 1], z = pos[i + 2];
+    if (y > 0) pos[i + 1] = y * (1 - 0.10 * (y / HEAD_RY)); // ease the crown round-flat
+    if (z < 0) pos[i + 2] = z * (1 - 0.18 * (-z / HEAD_RZ)); // pull the occiput in (nape)
+  }
+  g.attributes.position.needsUpdate = true;
+  g.translate(HEAD_CENTRE.x, HEAD_CENTRE.y, HEAD_CENTRE.z);
+  g.computeVertexNormals();
+  // strip the sphere's uv so the attribute set matches the other (uv-less) pieces
+  // for mergeGeometries (which requires identical attributes across inputs).
+  g.deleteAttribute('uv');
+  applyConstantSkin(g, BONE.HEAD);
+  return g;
+}
+
+// ===========================================================================
+// THE BILL — the pelican's signature, grown FORWARD out of the head ovoid as a
+// long deep broad-lens upper mandible. Its base ring sinks INTO the head (z behind
+// the ovoid front) so there's no notch/seam at the bill base; from there it runs
+// long and gently down to the hooked nail. All weighted to HEAD. The lower jaw +
+// gular pouch (buildLowerJawSkin) hangs below and welds shut against this.
+// ===========================================================================
+function buildBill(): THREE.BufferGeometry {
+  // bill stations: z, centre-y, half-width rx, half-height ry, flatten (broad lens)
+  // The FIRST station sits BEHIND the head-ovoid front (buried inside the skull) and
+  // is fat, so the bill emerges out of the face with no rim. Matches the lower-jaw
+  // closure table (billUnder) in buildLowerJawSkin — underside ≈ centre-y − ry.
+  const stations: { z: number; y: number; rx: number; ry: number; flat: number }[] = [
+    // The first TWO stations sit INSIDE the head ovoid (front at z≈1.10) and are big
+    // enough to fill its forward third, so the bill grows out of the face as a solid
+    // continuation — no notch at the culmen. The base centre-y rides high (≈ the head
+    // centre) so the culmen flows straight off the forehead rather than dipping.
+    { z: 0.97, y: 0.452, rx: 0.088, ry: 0.092, flat: 0.0 },  // deep inside the skull
+    { z: 1.06, y: 0.444, rx: 0.082, ry: 0.072, flat: 0.12 }, // still inside the ovoid front
+    { z: 1.15, y: 0.430, rx: 0.068, ry: 0.05,  flat: 0.32 }, // emerging from the lores
+    { z: 1.30, y: 0.414, rx: 0.06,  ry: 0.04,  flat: 0.5 },
+    { z: 1.50, y: 0.398, rx: 0.054, ry: 0.031, flat: 0.68 },
+    { z: 1.72, y: 0.380, rx: 0.047, ry: 0.025, flat: 0.8 },
+    { z: 1.94, y: 0.360, rx: 0.032, ry: 0.018, flat: 0.85 },
+    { z: 2.12, y: 0.344, rx: 0.011, ry: 0.013, flat: 0.6 }, // hooked nail
+  ];
+  const n = stations.length;
+  const SEGB = 24;
+  const verts: number[] = [], skinIdx: number[] = [], skinWgt: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const st = stations[i];
+    for (let s = 0; s < SEGB; s++) {
+      const a = (s / SEGB) * Math.PI * 2;
+      const ex = Math.cos(a), ey = Math.sin(a);
+      // broad horizontal lens (wide & shallow) for the bill
+      const fx = ex * lerp(1, 1.4, st.flat);
+      const fy = ey * lerp(1, 0.5, st.flat);
+      const ux = fx * st.rx, uy = fy * st.ry;
+      verts.push(st.z * 0 + 0 + ex * 0, 0, 0); // placeholder, overwritten below
+      const vi = (verts.length / 3) - 1;
+      verts[vi * 3] = ux;          // x (lateral)
+      verts[vi * 3 + 1] = st.y + uy; // y
+      verts[vi * 3 + 2] = st.z;      // z
+      skinIdx.push(BONE.HEAD, 0, 0, 0); skinWgt.push(1, 0, 0, 0);
+    }
+  }
+  const idx: number[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    const a = i * SEGB, b = (i + 1) * SEGB;
+    for (let s = 0; s < SEGB; s++) {
+      const j = (s + 1) % SEGB;
+      idx.push(a + s, a + j, b + j, a + s, b + j, b + s);
+    }
+  }
+  // cap the base (buried in head) and the tip (the nail)
+  {
+    const ci = verts.length / 3;
+    verts.push(0, stations[0].y, stations[0].z);
+    skinIdx.push(BONE.HEAD, 0, 0, 0); skinWgt.push(1, 0, 0, 0);
+    for (let s = 0; s < SEGB; s++) idx.push(ci, ((s + 1) % SEGB), s);
+  }
+  {
+    const base = (n - 1) * SEGB;
+    const ci = verts.length / 3;
+    verts.push(0, stations[n - 1].y, stations[n - 1].z);
+    skinIdx.push(BONE.HEAD, 0, 0, 0); skinWgt.push(1, 0, 0, 0);
+    for (let s = 0; s < SEGB; s++) idx.push(ci, base + s, base + ((s + 1) % SEGB));
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+  g.setAttribute('skinIndex', new THREE.BufferAttribute(new Uint16Array(skinIdx), 4));
+  g.setAttribute('skinWeight', new THREE.BufferAttribute(new Float32Array(skinWgt), 4));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
 }
 
 // ===========================================================================
@@ -521,14 +734,13 @@ function buildLowerJawSkin(): { geo: THREE.BufferGeometry } {
   // bill-centre y minus its half-height at each station (head/skull underside ≈0.35),
   // so the lower mandible's top edge tracks the upper bill underside the whole length
   // and the beak stays shut despite the head now riding low.
-  // NOTE: the upper bill is FLATTENED in the sweep (fy = ry·lerp(1,0.5,flatten)), so
-  // its true underside sits HIGHER than centre−ry. These y's are the flatten-aware
-  // undersides; the pouch top edge tracks them so the beak shuts FLUSH — the old
-  // table used full ry and left a visible open-beak slit along the bill.
+  // Matched to the DECOMPOSED upper bill (buildBill): underside ≈ bill-centre-y minus
+  // its (lens-flattened) half-height at each station, so the lower mandible's top edge
+  // tracks the upper bill underside the whole length and the beak stays shut.
   const billUnder: { z: number; y: number }[] = [
-    { z: 0.90, y: 0.345 }, { z: 0.99, y: 0.343 }, { z: 1.07, y: 0.349 }, { z: 1.145, y: 0.358 }, { z: 1.20, y: 0.362 },
-    { z: 1.24, y: 0.362 }, { z: 1.46, y: 0.354 }, { z: 1.70, y: 0.344 },
-    { z: 1.94, y: 0.334 }, { z: 2.12, y: 0.314 },
+    { z: 0.98, y: 0.376 }, { z: 1.06, y: 0.376 }, { z: 1.15, y: 0.388 },
+    { z: 1.30, y: 0.384 }, { z: 1.50, y: 0.377 }, { z: 1.72, y: 0.365 },
+    { z: 1.94, y: 0.350 }, { z: 2.12, y: 0.335 },
   ];
   const upperUnderAt = (z: number): number => {
     if (z <= billUnder[0].z) return billUnder[0].y;
@@ -540,15 +752,11 @@ function buildLowerJawSkin(): { geo: THREE.BufferGeometry } {
     }
     return last.y;
   };
-  const OVERLAP = 0.02;      // BASELINE weld: the top edge always sits at least this far up
-  //                            INTO the head/bill underside (even at the gape), so the
-  //                            ±0.01 surface noise can never open a slit and detach the jaw.
+  const OVERLAP = 0.016;     // top edge sits this far ABOVE the bill underside → shut
 
-  const hingeZ = 0.98;       // hinge at the GAPE (just under/behind the eye), tucked up
-  //                            under the head front — NOT a fat tube starting behind the
-  //                            head (that hung below as a boxy capped stub).
+  const hingeZ = 0.94;       // root starts further back under the skull
   const N = 18;
-  const len = 1.14;          // reaches forward to the bill tip (0.98 + 1.14 = 2.12)
+  const len = 1.18;          // reaches forward to the LONGER bill tip (0.94 + 1.18 = 2.12)
   const pts: THREE.Vector3[] = [];
   const profs: { rx: number; ry: number; sag: number; buried: number }[] = [];
   for (let i = 0; i < N; i++) {
@@ -556,35 +764,25 @@ function buildLowerJawSkin(): { geo: THREE.BufferGeometry } {
     const z = hingeZ + t * len;
     // BURIAL: the first ~20% of the trough is sunk up inside the head underside so its
     // surface coincides with the face (no seam). `buried` ramps 1 → 0 by ~20%.
-    // BURIAL ramps fast (done by ~16%) so ONLY the back rings — which sit under the
-    // WIDE round skull — are fattened/lifted to weld the jaw onto the head at the gape;
-    // forward of that (where the bill is narrow) the trough stays slim so it can't bulge
-    // out past the bill. This fixes both "lower jaw detached from head" and the old flap.
-    const buried = smoothstep(0.16, 0.0, t);
+    const buried = smoothstep(0.2, 0.0, t);
     // pouch bulge envelope — fullest about a third along (the swollen gular sac)
     const env = Math.sin(Math.PI * clamp01(t * 0.95));
-    // ring half-heights: SLIM at the root so it tucks up under the head at the gape (no
-    // hanging boxy stub), swelling with the gular sac mid-length, slim tip.
-    const ry = 0.016 + 0.04 * env + 0.014 * buried;
+    // ring half-heights: fat & buried at root, swelling with the gular sac, slim tip.
+    const ry = 0.016 + 0.045 * env + 0.055 * buried;
     // TARGET TOP EDGE: ride the bill underside + overlap; the root rides a touch
     // higher so it sinks up into the head underside. The centre is then targetTop−ry,
     // so cY+ry == the bill underside everywhere → the beak is closed along its length.
-    // Apply the closure OVERLAP only along the BILL; under the head (the throat, z≲1.1)
-    // ramp it to zero so the pouch top sits FLUSH with the head underside instead of
-    // poking up into/through the skull as a grey flap. The beak still shuts forward.
-    const targetTop = upperUnderAt(z) + OVERLAP + 0.02 * smoothstep(1.05, 1.3, z) + 0.006 * buried;
+    const targetTop = upperUnderAt(z) + OVERLAP + 0.02 * buried;
     const y = targetTop - ry;
     pts.push(new THREE.Vector3(0, y, z));
     profs.push({
-      // root stays SLIM and tucked up at the gape (top welded to the head underside);
-      // the body of the trough swells with the gular sac; the tip narrows.
-      rx: 0.03 + 0.052 * env + 0.018 * buried,
+      // root is FAT (fills the head underside so it welds in); the body of the
+      // trough swells with the gular sac; the tip narrows to meet the bill.
+      rx: 0.026 + 0.055 * env + 0.05 * buried,
       ry,
-      // THE GULAR SAC — a pelican's signature. The underside hangs FAR below in a
-      // soft catenary (deepest in the front-middle, easing at the throat and tip)
-      // while the top edge stays welded to the upper bill, so the deep pouch reads
-      // without ever cracking the beak open. `sag` multiplies ry on the lower half.
-      sag: 0.6 + 2.0 * env,
+      // the gular sac hangs the UNDERSIDE down (lower half only) — the swollen pouch —
+      // without ever lowering the top edge away from the bill.
+      sag: 0.7 * env,
       buried,
     });
   }
@@ -767,6 +965,11 @@ export interface BodyBuild {
 }
 
 export function buildBodySkin(): BodyBuild {
+  // DECOMPOSED build: body / neck / head / bill / jaw / tail-fan are built as
+  // SEPARATE purpose-shaped pieces, then merged into ONE skinned geometry sharing
+  // ONE skeleton (one draw call, one material). Each piece buries its capped end
+  // inside the next (body cap inside neck base; neck top inside head; bill base
+  // inside head; jaw welded under the bill) so the joins overlap with no rim.
   const stations = bodySpine();
   const { geo: bodyGeo, boneRest } = sweepBodySkin(stations);
   // swell the shoulders so each wing grows out of a fleshy shelf of body, then add
@@ -774,15 +977,20 @@ export function buildBodySkin(): BodyBuild {
   shoulderFairing(bodyGeo);
   roughen(bodyGeo, 0.01, 9, 0.4);
 
+  const neck = buildNeckTube();
+  roughen(neck, 0.006, 11, 0.0);
+  const head = buildHeadSphere();
+  roughen(head, 0.005, 13, 0.0);
+  const bill = buildBill();
   const jaw = buildLowerJawSkin().geo;
   const tailFan = buildTailFanSkin();
 
-  // merge the three skinned parts into ONE geometry (one draw call, one material).
+  // merge the skinned parts into ONE geometry (one draw call, one material).
   // mergeGeometries keeps the matching attributes (position/normal/skinIndex/
   // skinWeight); we recompute colour over the whole merged surface so the wash is
-  // continuous.
-  const merged = mergeGeometries([bodyGeo, jaw, tailFan], false)!;
-  bodyGeo.dispose(); jaw.dispose(); tailFan.dispose();
+  // continuous and flows across every buried join.
+  const merged = mergeGeometries([bodyGeo, neck, head, bill, jaw, tailFan], false)!;
+  bodyGeo.dispose(); neck.dispose(); head.dispose(); bill.dispose(); jaw.dispose(); tailFan.dispose();
   merged.computeVertexNormals();
 
   // ---- wing↔body MERGE MASK on the body side ----
@@ -796,12 +1004,23 @@ export function buildBodySkin(): BodyBuild {
     const mArr = new Float32Array(bn);
     const cz = WING_ATTACH.z, cy = WING_ATTACH.y;
     const izz = 1 / (2 * 0.5 * 0.5), iyy = 1 / (2 * 0.52 * 0.52);
+    // The DECOMPOSED joins are overlapping separate surfaces, so the NPR material
+    // would ink each piece's silhouette and draw a hard line where head overlaps neck
+    // or bill overlaps head. Bake aMerge bumps over those joins too, so the shader
+    // drops the inked contour + relaxes the toon banding right at the overlap and the
+    // pieces read as one continuous form (the buried geometry + this mask hide the seam).
+    const joinMask = (z: number, y: number, cz2: number, cy2: number, sz: number, sy: number) =>
+      Math.exp(-((z - cz2) * (z - cz2)) / (2 * sz * sz) - ((y - cy2) * (y - cy2)) / (2 * sy * sy));
     for (let i = 0; i < bn; i++) {
       const k = i * 3;
       const ax = Math.abs(bp[k]);
-      const dz = bp[k + 2] - cz, dy = bp[k + 1] - cy;
-      const env = Math.exp(-(dz * dz) * izz - (dy * dy) * iyy);
-      mArr[i] = env * smoothstep(0.03, 0.12, ax); // flanks only
+      const z = bp[k + 2], y = bp[k + 1];
+      const dz = z - cz, dy = y - cy;
+      const wing = Math.exp(-(dz * dz) * izz - (dy * dy) * iyy) * smoothstep(0.03, 0.12, ax); // flanks only
+      const neckJoin = 0.95 * joinMask(z, y, 0.90, 0.435, 0.10, 0.085);  // head↔neck (occiput)
+      const billJoin = 0.9 * joinMask(z, y, 1.10, 0.435, 0.07, 0.06);    // bill↔head (lores)
+      const bodyJoin = 0.85 * joinMask(z, y, 0.72, 0.20, 0.07, 0.07);    // body↔neck (shoulder)
+      mArr[i] = Math.min(1, Math.max(wing, neckJoin, billJoin, bodyJoin));
     }
     merged.setAttribute('aMerge', new THREE.BufferAttribute(mArr, 1));
   }
@@ -815,13 +1034,13 @@ export function buildBodySkin(): BodyBuild {
     // pale nape over the neck/head region (keyed to absolute z so it's robust to
     // the bounding box stretching with the tail fan)
     c.lerp(C_NECK, smoothstep(0.62, 0.78, top) * smoothstep(0.3, 0.6, z) * 0.5);
-    // dusky crown smudge on the very top of the head (z ≈ 0.86 → 1.05)
-    const crown = smoothstep(0.86, 1.0, top) * smoothstep(0.82, 0.92, z) * smoothstep(1.12, 1.0, z);
+    // dusky crown smudge on the very top of the head ovoid (z ≈ 0.92 → 1.06)
+    const crown = smoothstep(0.86, 1.0, top) * smoothstep(0.9, 0.97, z) * smoothstep(1.1, 1.0, z);
     c.lerp(C_CROWN, crown * 0.7);
-    // ---- bill: warm ochre, forward of the head (z ≳ 1.13) ----
-    const billT = smoothstep(1.1, 1.18, z);
+    // ---- bill: warm ochre, forward of the head ovoid (z ≳ 1.06) ----
+    const billT = smoothstep(1.04, 1.12, z);
     if (billT > 0) {
-      const along = smoothstep(1.13, 1.66, z); // 0 base → 1 tip
+      const along = smoothstep(1.07, 1.66, z); // 0 base → 1 tip
       const bill = C_BILL.clone().lerp(C_BILL_TIP, along * 0.9);
       if (top > 0.55) bill.lerp(C_BILL_RIDGE, (top - 0.55) / 0.45 * 0.4); // culmen ridge
       if (along > 0.85) bill.lerp(C_BILL_TIP.clone().multiplyScalar(0.7), (along - 0.85) / 0.15 * 0.8); // nail
