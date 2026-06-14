@@ -275,15 +275,16 @@ function bodySpine(): Station[] {
     // gap opens between rump and rectrices. The TAIL ring radii stay generous and
     // ease (not collapse) toward the fan root.
     S(new THREE.Vector3(0, 0.052, -1.18), 0.052, 0.03, 0.05, BONE.TAIL),
-    S(new THREE.Vector3(0, 0.052, -1.06), 0.086, 0.058, 0.12, BONE.TAIL, 0.5),
-    S(new THREE.Vector3(0, 0.05, -0.95), 0.108, 0.082, 0.2, BONE.TAIL, 1.0), // rump shoulder (fan springs here)
-    // ---- body teardrop ----
-    S(new THREE.Vector3(0, 0.04, -0.82), 0.14, 0.13, 0.28, BONE.BODY, 0.0),
-    S(new THREE.Vector3(0, -0.01, -0.5), 0.2, 0.215, 0.4, BONE.BODY),
-    S(new THREE.Vector3(0, -0.02, -0.12), 0.238, 0.262, 0.48, BONE.BODY), // heaviest belly
-    S(new THREE.Vector3(0, 0.0, 0.22), 0.218, 0.238, 0.42, BONE.BODY), // breast
-    S(new THREE.Vector3(0, 0.07, 0.52), 0.15, 0.17, 0.26, BONE.BODY, 0.4),
-    S(new THREE.Vector3(0, 0.16, 0.72), 0.092, 0.102, 0.12, BONE.BODY, 1.0), // shoulder / neck root
+    S(new THREE.Vector3(0, 0.052, -1.06), 0.074, 0.058, 0.12, BONE.TAIL, 0.5),
+    S(new THREE.Vector3(0, 0.05, -0.95), 0.09, 0.082, 0.2, BONE.TAIL, 1.0), // rump shoulder (fan springs here)
+    // ---- body teardrop (narrowed laterally — rx only; ry kept so the side
+    // profile stays full and the bird reads sleek, not deflated) ----
+    S(new THREE.Vector3(0, 0.04, -0.82), 0.115, 0.13, 0.28, BONE.BODY, 0.0),
+    S(new THREE.Vector3(0, -0.01, -0.5), 0.162, 0.215, 0.4, BONE.BODY),
+    S(new THREE.Vector3(0, -0.02, -0.12), 0.192, 0.262, 0.48, BONE.BODY), // heaviest belly
+    S(new THREE.Vector3(0, 0.0, 0.22), 0.176, 0.238, 0.42, BONE.BODY), // breast
+    S(new THREE.Vector3(0, 0.07, 0.52), 0.122, 0.17, 0.26, BONE.BODY, 0.4),
+    S(new THREE.Vector3(0, 0.16, 0.72), 0.08, 0.102, 0.12, BONE.BODY, 1.0), // shoulder / neck root
     // ---- S-neck (folds up & back, then forward) ----
     S(new THREE.Vector3(0, 0.3, 0.74), 0.078, 0.086, 0.06, BONE.NECK0, 0.6),
     S(new THREE.Vector3(0, 0.44, 0.69), 0.068, 0.076, 0.0, BONE.NECK1, 0.5),
