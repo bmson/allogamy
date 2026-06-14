@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import {
   Fn, vec2, vec3, float, mix, clamp, max, min, dot, smoothstep, fract, sin, floor,
-  oneMinus, pow, abs, uniform, vertexColor, normalWorld, positionWorld,
+  oneMinus, pow, abs, uniform, vertexColor, normalWorld,
   positionViewDirection, screenCoordinate, length,
 } from 'three/tsl';
 import { SUN_DIR } from '../config';
@@ -17,11 +17,22 @@ import { SUN_DIR } from '../config';
 // stipple) drawing moving through the painting, so the eye reads it as "the
 // drawn creature in the painted world."
 //
-// So we throw out the soft toon look and INK THE BIRD ON PAPER, in screen space:
+// So we throw out the soft toon look and INK THE BIRD ON PAPER, in screen space.
+//
+// CRUCIAL: the drawing — not the baked 3D model — defines the form. The baked
+// per-vertex wash carries its OWN 3D shading (top/under gradients, baked AO, a
+// `sunlit` term, feather shading). If we composited the hatch OVER that, the bird
+// would read as a 3D-lit model with hatching laid on top — two shading systems
+// fighting. So the baked colour is used for IDENTITY ONLY: we keep its HUE/chroma
+// (grey plumage vs warm bill) but FLATTEN its value to a constant mid, erasing the
+// baked gradients/AO. ALL light & shadow — both the hatch DENSITY and the paper's
+// own value — come from the LIVE wrapped n·sun alone. The result is a flat-shaded
+// DRAWING: paper + ink hatch + inked contour describe the form, no "3D + hatch".
 //
 //   • SHADED VALUE — a soft wrapped/half-Lambert n·sun gives a 0..1 lightness per
-//     fragment (bright facing the sun, dark in shade). This VALUE drives how much
-//     drawing (graphite/ink) we lay down: bright = bare paper, dark = dense marks.
+//     fragment (bright facing the sun, dark in shade). This LIVE VALUE is the ONLY
+//     shading: it drives how much drawing (graphite/ink) we lay down AND the value
+//     of the paper itself: bright = bare lit paper, dark = dense marks.
 //   • PENCIL CROSS-HATCHING — screen-space hatch lines at several orientations.
 //     Bright areas are bare paper; as the value darkens we reveal one hatch layer,
 //     then a second crossing layer, then a third/fourth — classic build-up of a
@@ -79,17 +90,20 @@ export interface BirdShadeOpts {
 }
 
 const DEFAULTS: Required<Omit<BirdShadeOpts, 'emissiveTint'>> = {
-  wrap: 0.55,
-  ambient: 0.16,        // shade still leaves a little paper — never a solid black blob
-  inkStrength: 0.92,    // bold, confident graphite
-  hatchScale: 7.0,      // ~7 px between strokes — a clear, legible pencil hatch
+  wrap: 0.6,            // soft illustrated falloff so the shaded side is hatched, not black
+  ambient: 0.30,        // higher floor: with the baked AO gone, the LIVE light alone owns
+                        //   shade — keep the darkest hatch open so the silhouette never
+                        //   fills solid and the drawing stays legible.
+  inkStrength: 0.82,    // confident graphite, but not so bold the form clots up
+  hatchScale: 7.5,      // ~7.5 px between strokes — a clear, legible pencil hatch
   hatchSoft: 0.5,
   hatchJitter: 0.35,
   hatchDot: 0.0,        // DEFAULT = pencil cross-hatch (set →1 for the dotted look)
   dotScale: 6.0,
-  contour: 0.85,
-  paperWarmth: 0.35,
-  tintIdentity: 0.55,
+  contour: 0.9,         // a hair stronger: the inked contour now does more of the form-
+                        //   defining work (no baked 3D gradient under it)
+  paperWarmth: 0.4,     // lit paper warms toward the golden key — the only "light" tint
+  tintIdentity: 0.6,    // identity HUE only — applied to a value-flattened albedo
 };
 
 // Cheap screen-space value hash → soft per-region noise so the marks waver like a
@@ -175,9 +189,21 @@ export function makeBirdMaterial(opts: BirdShadeOpts = {}): BirdMaterial {
   const keyWarm = vec3(KEY_WARM.r, KEY_WARM.g, KEY_WARM.b);
 
   // Base albedo = the baked painterly vertex wash (heron-grey / charcoal / ochre).
-  // Used ONLY to give the ink + paper the bird's own identity (grey plumage →
-  // graphite, warm bill → sepia), so the drawing reads as THIS creature.
-  const albedo = vertexColor().rgb;
+  // It is used ONLY for IDENTITY — but the baked wash carries its own 3D shading
+  // (top/under gradients, baked AO, a `sunlit` term, feather shading). If we tinted
+  // with it raw, those baked gradients would show through and FIGHT the live hatch
+  // (a 3D-lit model with hatching on top). So we FLATTEN its value: keep the
+  // hue/chroma (the *colour identity* — grey plumage vs warm ochre bill vs charcoal
+  // primaries) but normalise its lightness to a constant mid. Then the only value
+  // variation on the bird comes from the LIVE light below, never from the bake.
+  const rawAlbedo = vertexColor().rgb;
+  // perceptual luma of the baked colour (its 3D-shaded value we want to discard)
+  const albLuma = dot(rawAlbedo, vec3(0.299, 0.587, 0.114));
+  // chroma = colour direction with the (3D-shaded) brightness divided out, then
+  // re-seated at a constant MID value. So #2b2f38 charcoal and #e8b04a ochre keep
+  // their HUE but no longer carry the bake's dark/light — a flat identity swatch.
+  const FLAT_VALUE = float(0.62); // constant mid lightness for every identity swatch
+  const albedo = rawAlbedo.div(max(albLuma, float(0.04))).mul(FLAT_VALUE);
 
   // World-space normal so shading (and thus drawing density) tracks the sun as the
   // bird banks / flaps / wheels.
@@ -283,17 +309,25 @@ export function makeBirdMaterial(opts: BirdShadeOpts = {}): BirdMaterial {
   const inkCov = clamp(max(markCov, contourCov).mul(uInk), float(0.0), float(1.0));
 
   // ============================ INK-ON-PAPER OUTPUT ===========================
-  // Give the paper + ink the bird's own identity so the drawing reads as THIS
-  // creature: lerp the neutral paper/ink toward the albedo by `tintIdentity`. The
-  // paper additionally warms toward the scene's golden key on the LIT side so the
-  // drawing shares the world's light temperature; the ink picks up a darkened,
-  // slightly desaturated version of the albedo (graphite of that hue).
-  // identity hue for the paper (light, washed toward the bird's local colour)
-  const litPaper = mix(paper, paper.mul(keyWarm), value.mul(uPaperWarmth));
-  const idPaper = mix(litPaper, max(albedo, vec3(0.0)), uTintIdentity.mul(0.6));
-  // ink tone: charcoal nudged toward a deep version of the local albedo (so the warm
-  // bill inks warmer/sepia, the grey plumage inks cool graphite) — kept dark.
-  const albInk = min(albedo.mul(0.45), vec3(0.6, 0.6, 0.6));
+  // Give the paper + ink the bird's own identity — but ONLY its HUE. The albedo is
+  // already value-flattened above, so tinting the paper toward it tints the COLOUR
+  // (grey plumage / warm bill) WITHOUT re-introducing the baked 3D gradients.
+  //
+  // The paper's VALUE (its brightness) comes from the LIVE light alone: build the
+  // identity-tinted paper at its flat base, then multiply by the live `value` so the
+  // sunlit side is bright paper and the shaded side darkens smoothly — a single,
+  // coherent light owning the whole form (no bake fighting the hatch).
+  const warmedPaper = mix(paper, paper.mul(keyWarm), value.mul(uPaperWarmth));
+  // flatten the warm paper to its own value too, so mixing toward the flat albedo
+  // doesn't tilt the result light/dark — only its hue shifts toward the identity.
+  const idPaperFlat = mix(warmedPaper, max(albedo, vec3(0.0)), uTintIdentity.mul(0.55));
+  // re-seat the live light as the paper's value: shaded paper sinks toward a soft
+  // warm grey (not black), lit paper stays full. This is the ONLY value gradient.
+  const shadePaper = idPaperFlat.mul(0.5);            // where the live light is darkest
+  const idPaper = mix(shadePaper, idPaperFlat, value); // value = live n·sun only
+  // ink tone: charcoal nudged toward a deep version of the local (flat) albedo so the
+  // warm bill inks warmer/sepia and the grey plumage inks cool graphite — kept dark.
+  const albInk = min(albedo.mul(0.4), vec3(0.55, 0.55, 0.55));
   const idInk = mix(ink, albInk, uTintIdentity.mul(0.7));
 
   // lay ink onto paper by coverage.

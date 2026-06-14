@@ -95,6 +95,17 @@ export class Bird implements Updatable {
   private morphPitch = 0;
   private morphRollVel = 0; // for an extra overshoot on the leading bend
   private bankRate = 0; // d(roll)/dt, smoothed — drives "lean into the new turn"
+  // eased GAZE state: the head looks WHERE THE BIRD IS GOING. These lag the
+  // controller's pitch/roll on their own springs so the gaze LEADS smoothly into a
+  // climb/dive/bank a beat behind the body — the head tips and turns to follow the
+  // flight path rather than snapping. Separate from morphPitch/Roll (which drive the
+  // whole-body arc) so the gaze can ease on its own, soulful timing.
+  private gazePitch = 0; // eased toward flight.pitch → head tips up climbing / down diving
+  private gazeYaw = 0;   // eased toward flight.roll  → head leads into the bank
+  // neck flex spring: an organic extend/compress + vertical bob that ripples down the
+  // S-neck. A second-order spring driven by the heave gives it weight (no jitter).
+  private neckFlex = 0;
+  private neckFlexVel = 0;
 
   constructor(scene: THREE.Scene, flight: FlightController) {
     this.flight = flight;
@@ -110,11 +121,13 @@ export class Bird implements Updatable {
     // identity. World-space normals keep the shading (and hatch density) pinned to the
     // scene sun as the bird banks and flaps. (See birdMaterial.makeBirdMaterial.)
     const bodyMat = makeBirdMaterial();
-    // the wing membranes keep a touch cooler/darker slate ink (their charcoal
-    // primaries), with a hair more contour so the long flight feathers read as
-    // separate inked planes, and a slightly finer hatch for the long feather chords.
+    // the wing membranes read in the SAME grey-graphite as the body so the buried
+    // wing root melts into the flank — no stark cool/dark slate flap clipping into a
+    // warmer body. We keep only a hair more contour (so the long flight feathers
+    // still read as separate inked planes) and a slightly finer hatch for the long
+    // feather chords, but drop the cool slate emissiveTint that set the wings apart.
     const wingMat = makeBirdMaterial({
-      hatchScale: 6.2, contour: 0.95, emissiveTint: new THREE.Color('#3a4150'),
+      hatchScale: 6.2, contour: 0.95,
     });
     // legs are small — a finer, lighter pencil so the thin tarsi don't go solid black.
     const legMat = makeBirdMaterial({ hatchScale: 5.0, inkStrength: 0.8, contour: 0.7 });
@@ -318,6 +331,16 @@ export class Bird implements Updatable {
     const mPitch = this.morphPitch; // vertical (Y) body-arc driver (±~0.42)
     const lead = clamp(this.morphRollVel, -0.5, 0.5); // extra lean entering a turn
 
+    // --- GAZE drivers: the head looks WHERE IT'S GOING. Ease the raw flight pitch &
+    // roll on their own (slightly slower than the body morph) so the gaze LEADS into
+    // the path a beat behind the body — tipping up into a climb, down into a dive,
+    // and turning into a bank — all smooth and soulful, never snapping rigid. ---
+    const kGaze = 1 - Math.exp(-dt * 2.6);
+    this.gazePitch += (this.flight.pitch - this.gazePitch) * kGaze;
+    this.gazeYaw += (this.flight.roll - this.gazeYaw) * kGaze;
+    const gPitch = clamp(this.gazePitch, -0.6, 0.6); // travel-direction pitch (up climb / down dive)
+    const gYaw = clamp(this.gazeYaw, -0.7, 0.7);      // lean the gaze into the bank
+
     // --- BANKING TURN, the signature move: a bird WHEELS, it doesn't yaw flat. ---
     // Sign of the bank (controller contract, verified): +roll rolls the +X (right)
     // wing UP and the -X (left) wing DOWN. The LOW wing is always the INSIDE of the
@@ -487,55 +510,89 @@ export class Bird implements Updatable {
     this.bTorso.rotation.y = 0.04 * mRoll + 0.04 * lead; // mild waist yaw into the turn
     this.bTorso.rotation.z = -0.03 * mRoll;            // subtle waist roll-with-bank
 
+    // --- NECK FLEX: the neck is no longer static. A second-order spring drives an
+    // organic EXTEND/COMPRESS + vertical BOB, coupled to the heave/wingbeat (the
+    // neck lengthens as the chest lifts on the downstroke, gathers back on recovery)
+    // plus a faint idle pulse so it's alive even on a held glide. The spring gives it
+    // WEIGHT — slow and soulful, never a jitter — and we ripple it down the S with a
+    // per-joint lag so the flex travels along the neck instead of bending as one rod. ---
+    const flexTarget = 0.55 * driveDown * amp           // heave-coupled extend on the downstroke
+      + 0.18 * mPitch                                   // reach up into a climb / gather in a dive
+      + 0.12 * Math.sin(idle * 0.5)                     // faint idle breath so a glide stays alive
+      - 0.20 * Math.max(0, -flex) * amp;                // compress as the chest stretches on recovery
+    // critically-ish damped spring → weighty, no jitter (sub-stepped for stability)
+    {
+      const sub = dt > 1 / 90 ? 2 : 1;
+      const h = dt / sub;
+      for (let k = 0; k < sub; k++) {
+        const a = 30 * (flexTarget - this.neckFlex) - 9.5 * this.neckFlexVel;
+        this.neckFlexVel += a * h;
+        this.neckFlex += this.neckFlexVel * h;
+      }
+      if (!isFinite(this.neckFlex)) { this.neckFlex = 0; this.neckFlexVel = 0; }
+    }
+    const neckFlex = this.neckFlex;
+
     // --- neck: a travelling wave runs down the welded S (each bone lags the one
     // before), so the neck undulates like a real supple neck. Because the skin is
     // weighted smoothly across these bones, it bends as one continuous surface.
-    // The neck also CONTINUES the body's lateral arc — each bone curving a little
-    // more into the turn so the front half of the creature sweeps into the bank,
-    // and counter-bends vertically against the torso so a climb arcs the body into
-    // a gentle C. The cumulative bend is spread thinly across four joints, keeping
-    // the welded surface smooth (no kink). ---
+    // Layered on the wave: the SPRING-DRIVEN flex above (vertical up-down) AND a
+    // LATERAL sway (sideways), both rippled down the chain with per-joint lag so the
+    // neck flexes up-down and side-to-side as the bird flies, eased for weight. It
+    // also CONTINUES the body's lateral arc — each bone curving a little more into
+    // the turn so the front half sweeps into the bank — and counter-bends vertically
+    // against the torso so a climb bows the body into a gentle C. The cumulative bend
+    // is spread thinly across four joints, keeping the welded surface smooth (no kink). ---
     const n = this.bNeck;
     const nLen = n.length;
-    let neckPitchSum = 0; // running sum of the neck's X bend, for gaze stabilisation
+    let neckPitchSum = 0; // running sum of the neck's X bend (the gaze inherits this)
     for (let i = 0; i < nLen; i++) {
-      const lag = i * 0.5;
-      const f = (i + 1) / nLen; // 0..1 outward along the neck
+      const lag = i * 0.6;              // per-joint phase lag → the flex ripples down the S
+      const f = (i + 1) / nLen;         // 0..1 outward along the neck
+      const ease = 0.55 + 0.45 * f;     // outer joints flex more (the head end is loosest)
+      // VERTICAL flex (up-down): the travelling wingbeat wave + the weighty spring
+      // flex, both lagged down the chain. Negative X tips this bone's run upward, so
+      // a positive `neckFlex` extends/lifts the neck (reaches up into the climb).
       const wave = 0.05 * Math.sin(ph - lag) * amp + 0.03 * Math.sin(idle * 0.6 - lag * 0.5);
-      const yaw = 0.03 * Math.sin(idle * 0.45 - lag) * (0.5 + 0.5 * f);
-      // vertical arc: neck eases the opposite way to the chest-tip so climb/dive
-      // bows the whole body smoothly rather than rigidly tipping the head.
-      n[i].rotation.x = wave * (0.7 + 0.3 * f) - 0.05 * mPitch * f;
+      n[i].rotation.x = wave * (0.7 + 0.3 * f)
+        - 0.16 * neckFlex * ease        // spring-driven up-down flex, rippling outward
+        - 0.05 * mPitch * f;            // counter-arc vs the chest tip (smooth C through climb)
       neckPitchSum += n[i].rotation.x;
-      // lateral arc: progressively curve the neck into the turn so the whole front
-      // half of the bird sweeps toward the new heading (the neck leads the head into
-      // the wheel). Bent more outboard (×f), spread across four joints → a smooth
-      // welded curve, no kink.
-      n[i].rotation.y = yaw + 0.11 * mRoll * f + 0.05 * lead * f;
+      // SIDEWAYS sway (lateral): a slow lateral undulation with the per-joint lag so
+      // the neck weaves gently side to side as it flies (alive on a glide), coupled
+      // to the roll/heave, PLUS the progressive curve into the turn so the front half
+      // sweeps toward the new heading. Spread across four joints → a smooth welded
+      // curve, never a kink.
+      const sway = 0.045 * Math.sin(idle * 0.55 - lag * 0.7) * (0.5 + 0.5 * f)
+        + 0.02 * Math.sin(ph * 0.5 - lag) * amp;       // a faint wing-driven side weave
+      n[i].rotation.y = sway + 0.11 * mRoll * f + 0.05 * lead * f;
       // axial roll: the neck progressively counter-rolls toward level (each bone
       // unwinds a little of the body's bank) so by the head the gaze is near
       // horizontal — the supple neck does the levelling, not a snap at the skull.
       n[i].rotation.z = -0.07 * mRoll * f;
     }
-    // GAZE STABILISATION — the soul of a soaring bird. While the torso heaves with
-    // each beat and tips through the arc, the HEAD stays remarkably steady, eyes
-    // locked on the horizon. We sum the pitch the head has already inherited down
-    // the chain (chest tip + the neck's counter-arc) and cancel most of what's left,
-    // so the head holds level with calm intent rather than nodding with the body.
-    // The faint residual wingbeat nod (held to a whisper) keeps it alive, not rigid.
+    // HEAD GAZE — the head LOOKS WHERE THE BIRD IS GOING. Instead of locking level on
+    // the horizon, the head aims along the FLIGHT/TRAVEL direction: it tips UP when
+    // climbing and DOWN when diving (eased `gPitch`), turning/leading slightly into a
+    // bank (`gYaw`). We first cancel most of the pitch the head inherited down the
+    // chain (chest tip + the neck's wave/flex) so the gaze starts from a stable datum,
+    // THEN add the travel-direction aim on top — so the head actively points along the
+    // path rather than nodding with the body or staying rigidly level. The faint
+    // wingbeat/idle nod keeps it alive.
     const inheritedPitch = this.bTorso.rotation.x + neckPitchSum;
-    this.bHead.rotation.x = -0.9 * inheritedPitch - 0.04 * mPitch
-      - 0.018 * Math.sin(ph - 1.9) * amp + 0.018 * Math.sin(idle * 0.9);
+    // bird convention: head.rotation.x is applied as part of the body frame where a
+    // NEGATIVE x pitches the nose/gaze UP. Climbing (gPitch > 0) → look up → negative.
+    this.bHead.rotation.x = -0.85 * inheritedPitch     // settle out the inherited nod first
+      - 0.55 * gPitch                                  // then AIM along travel: up climb / down dive
+      - 0.018 * Math.sin(ph - 1.9) * amp + 0.018 * Math.sin(idle * 0.9); // alive, not rigid
     // The head LEADS the wheel: it turns to point along the new heading (the bird
-    // looks where it is going) and the neck already swept it most of the way there,
-    // so this just finishes the gaze pointing into the turn. (+mRoll → heading +X →
-    // nose toward +X, which is +head.y, so this term is +.)
-    this.bHead.rotation.y = 0.10 * mRoll + 0.025 * Math.sin(idle * 0.55);
-    // GAZE LEVELLING — the soul of a banking bird: while the whole body rolls into
-    // the wheel, the head counter-rolls to keep the eyes near horizontal, locked on
-    // the world. The root applies the full bank (+mRoll about Z); here we roll the
-    // head strongly the OTHER way so the gaze stays level even at a hard bank. This
-    // steady, soulful eye-line is what reads as a living animal carving a turn.
+    // looks where it is going), and the neck already swept it most of the way there,
+    // so this finishes the gaze pointing into the turn. (+roll → heading +X → nose
+    // toward +X, which is +head.y.) Driven by the eased gaze so it leads smoothly.
+    this.bHead.rotation.y = 0.16 * gYaw + 0.025 * Math.sin(idle * 0.55);
+    // GAZE LEVELLING in roll: while the body rolls into the wheel, the head counter-
+    // rolls so the eyes stay near horizontal, locked on the world — the steady,
+    // soulful eye-line of a living animal carving a turn, even as it looks ahead.
     this.bHead.rotation.z = -0.34 * mRoll - 0.04 * this.bTorso.rotation.z + 0.05 * lead;
     this.bJaw.rotation.x = 0.018 * driveDown + 0.008 * (0.5 + 0.5 * Math.sin(idle * 0.5)); // bill cracks open under load + soft idle gape
 
