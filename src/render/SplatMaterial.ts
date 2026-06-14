@@ -125,8 +125,13 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   const fogCol = vec3(palette.fog.r, palette.fog.g, palette.fog.b);
   const air = smoothstep(uFogNear, uFogFar, depth);
   const lum = aColor.dot(vec3(0.299, 0.587, 0.114));
-  const greyed = mix(aColor, vec3(lum, lum, lum), air.mul(0.35));
-  const graded = vertexStage(mix(greyed, fogCol, air.mul(0.72)));
+  const greyed = mix(aColor, vec3(lum, lum, lum), air.mul(0.5));
+  // Wash distant dabs almost fully into the aerial colour at the far plane (0.92,
+  // up from 0.72): the streaming frontier sits just past FOG_FAR, so dabs born
+  // there must dissolve into the haze rather than retaining ~28% of their hue and
+  // reading as a faint silhouette popping in. The mid-distance is a touch hazier as
+  // a result — that IS the aerial perspective that gives the landscape its depth.
+  const graded = vertexStage(mix(greyed, fogCol, air.mul(0.92)));
 
   // ---- LOADED-BRUSH TOOTH (per-fragment, cheap) ----------------------------
   // A smooth gaussian dab reads like airbrush; real loaded-brush paint shows

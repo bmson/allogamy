@@ -115,7 +115,11 @@ export class World {
     if (this.queue.length) this.queueDirty = true;
 
     // ---- queue any missing chunk inside the load disc, nearest cells first ----
-    const r2 = LOAD_RADIUS * LOAD_RADIUS + 1;
+    // +2 (not +1) rounds the disc just enough to fill the 45° corner notch: it pulls
+    // in the four (±3,±3) cells so the worst-case diagonal frontier sits at ~500 m
+    // instead of ~450 m, letting FOG_FAR (480) bury it with margin. Costs +4 chunks
+    // (~8%), far cheaper than bumping LOAD_RADIUS, so the frontier is never seen.
+    const r2 = LOAD_RADIUS * LOAD_RADIUS + 2;
     for (let dz = -LOAD_RADIUS; dz <= LOAD_RADIUS; dz++) {
       for (let dx = -LOAD_RADIUS; dx <= LOAD_RADIUS; dx++) {
         if (dx * dx + dz * dz > r2) continue;

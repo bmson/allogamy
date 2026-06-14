@@ -28,16 +28,18 @@ export const SPLAT_DENSITY = 1.0;
 export const WIND_STRENGTH = 1.7;
 
 // Fog hides the streaming frontier: new chunks are born beyond FOG_FAR (inside
-// the haze) and never visibly pop in. LOAD_RADIUS*CHUNK_SIZE must exceed FOG_FAR.
-// Haze onset pushed OUT so a clear, saturated foreground band reads first and then
-// recedes into mist — that dark→light, sharp→soft gradient is what gives the
-// landscape depth. Too close (110) washed the mid-field flat. The far plane still
-// dissolves the hills and the streaming frontier into the cool grey-blue haze.
-// Fog effectively REMOVED — pushed far beyond the ~800 m loaded world so nothing
-// in view is hazed (bright, clear, happy day). Re-add via the panel's fog sliders
-// or by lowering these. (The splat aerial wash + scene.fog both read these.)
-export const FOG_NEAR = 1580;
-export const FOG_FAR = 3000;
+// the haze) and never visibly pop in — the landscape is always FULLY built before
+// it emerges from the haze into view. So FOG_FAR MUST sit inside the guaranteed-
+// built radius. With LOAD_RADIUS=4 the load disc (slightly rounded in World.ts)
+// guarantees ~500 m of contiguous terrain even in its worst diagonal notch and at
+// the worst bird-in-cell offset, so FOG_FAR=480 keeps the frontier safely buried.
+// The haze colour is the bright pale blue-violet palette.fog, so the distance
+// reads as a luminous summer haze (Ghibli aerial perspective), NOT grey gloom: a
+// crisp, saturated ~300 m foreground that recedes into bright sky. Open the view
+// out by raising LOAD_RADIUS (+ the disc round-out) AND these together, or pull
+// them via the panel's fog sliders. (The splat aerial wash + scene.fog read these.)
+export const FOG_NEAR = 300;
+export const FOG_FAR = 480;
 
 // Camera. Narrower fov → compressed, painting-like framing. Matches 6.html's 52°.
 export const CAM_FOV = 52;

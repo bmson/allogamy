@@ -51,9 +51,9 @@ const RIPPLE = 0.05; // metres of vertical relief on the inner rings (very subtl
 // Tuned for a CALM stream/tarn: travelling waves of a few cm, drifting slowly in
 // one direction like a gentle current, plus a slow sky-sheen scroll. Bump these to
 // make the water busier; drop them toward 0 to freeze it.
-const WAVE_AMP = 0.06; // metres of vertical ripple (world scale) — very subtle
+const WAVE_AMP = 0.18; // metres of vertical ripple (world scale) — a visible gentle heave
 const WAVE_FREQ = 0.08; // spatial frequency (1/m) — long, lazy swells, not chop
-const WAVE_SPEED = 0.55; // how fast the ripple front drifts (the "current")
+const WAVE_SPEED = 0.7; // how fast the ripple front drifts (the "current")
 
 // ---- COLOUR-DRIVEN motion (the geometric ripple above is too small to read from a
 // fast, high glide, so the *visible* "it's alive" cue is animated COLOUR instead) ----
@@ -62,8 +62,8 @@ const WAVE_SPEED = 0.55; // how fast the ripple front drifts (the "current")
 // near-flat low-poly disc.
 const CAUSTIC_FREQ_A = 0.17; // 1/m — primary caustic band frequency
 const CAUSTIC_FREQ_B = 0.1; // 1/m — secondary, crosses the first
-const CAUSTIC_SPEED = 0.85; // how fast the bright bands drift downstream
-const CAUSTIC_STRENGTH = 0.34; // how strongly the bands lighten the surface toward sky-blue
+const CAUSTIC_SPEED = 1.05; // how fast the bright bands drift downstream
+const CAUSTIC_STRENGTH = 0.5; // how strongly the bands lighten the surface toward sky-blue
 // A slow, steady DIRECTIONAL CURRENT (unit-ish vector in world XZ) that everything
 // scrolls along, so the eye reads one coherent flow instead of a standing pattern.
 const CURRENT_X = 0.92; // current heading (need not be normalised — folded into speeds)
@@ -79,28 +79,30 @@ const WARP_SPEED = 0.35; // how fast the warp field itself drifts
 // actually crawls across the water (not just the baked relief). Tiny tilt.
 const SHIMMER_FREQ = 0.22; // 1/m
 const SHIMMER_SPEED = 0.9; // drift of the shimmer
-const SHIMMER_AMP = 0.12; // how far the normal tilts (radians-ish, kept very small)
+const SHIMMER_AMP = 0.2; // how far the normal tilts (radians-ish, kept small)
 
 // Shore foam: a pale lip that LAPS in and out at the waterline (a travelling pulse,
 // gated to the rim by the baked aShore factor) — reads as water breaking on the shore.
-const FOAM_SPEED = 1.7; // how fast the foam laps along the shore
+const FOAM_SPEED = 2.3; // how fast the foam laps along the shore
 const FOAM_FREQ = 0.55; // 1/m — wavelength of the lapping band (short, frothy)
-const FOAM_STRENGTH = 0.9; // peak whiteness of the foam at the rim
+const FOAM_STRENGTH = 1.0; // peak whiteness of the foam at the rim
 const FOAM = new THREE.Color('#eef6f7'); // near-white shore foam / splash
 // SHORE SPLASH: a slow surge that runs UP the shore and recedes. The band of shore
 // that is "wet" (foamed) advances and retreats over time; where the surge peaks the
 // foam froths brightest and lifts a touch. Travels ALONG the shore via the baked
 // per-vertex tangent coordinate `aTangent` so adjacent rim verts crest in sequence
 // (a wave running down the beach) rather than the whole rim pulsing as one.
-const SURGE_SPEED = 0.5; // how fast the wet line breathes in/out (slow = calm)
-const SURGE_ALONG = 2; // surge crests per full turn — INTEGER so it wraps seamlessly
-//                       around the rim (aTangent wraps 1→0 with no phase jump).
-const SURGE_REACH = 0.34; // how far up the shore (in aShore units) the surge climbs
-const SPLASH_LIFT = 0.16; // metres the foam crest lifts at its peak (a little hop)
+const SURGE_SPEED = 1.7; // how fast the wet line runs up / draws back — fast enough
+//                          to read as water BREAKING on the shore, not a slow breath.
+const SURGE_ALONG = 3; // surge crests per full turn — INTEGER so it wraps seamlessly
+//                       around the rim (aTangent wraps 1→0 with no phase jump). More
+//                       crests = several little splashes chasing each other round the rim.
+const SURGE_REACH = 0.42; // how far up the shore (in aShore units) the surge climbs
+const SPLASH_LIFT = 0.32; // metres the foam crest lifts at its peak (the splash hop)
 // Frothy broken edge: a small value-noise breaks the foam line so it isn't a clean
 // sine — patches of froth appear/dissolve as the noise field drifts.
 const FROTH_FREQ = 0.9; // 1/m — spatial scale of the froth speckle
-const FROTH_SPEED = 0.7; // drift of the froth noise field
+const FROTH_SPEED = 1.0; // drift of the froth noise field
 
 /**
  * Calm, MOVING water surface material (TSL node material). Shared by every water
@@ -261,7 +263,7 @@ export function makeWaterMaterial(): THREE.MeshStandardNodeMaterial {
   // foam, so both the drifting glints and the breaking foam stay bright through the
   // lighting/grade (added after lighting → guaranteed to read as motion).
   const sky = vec3(palette.skyHorizon.r, palette.skyHorizon.g, palette.skyHorizon.b);
-  mat.emissiveNode = sky.mul(float(0.26).add(caustic.mul(0.16))).add(foamCol.mul(foam.mul(0.45)));
+  mat.emissiveNode = sky.mul(float(0.26).add(caustic.mul(0.16))).add(foamCol.mul(foam.mul(0.6)));
 
   return mat;
 }
