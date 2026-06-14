@@ -6,6 +6,7 @@ import {
   BONE, WBONE, WING_JOINTS, WING_ATTACH, TARSUS_LEN, C_EYE,
 } from './birdGeometry';
 import { makeBirdMaterial } from './birdMaterial';
+import { buildBirdSplatCoat, CoatSource } from './birdSplats';
 
 // THE PELICAN — the soul of the piece. The player IS this bird, gliding alone
 // over the painted meadow.
@@ -115,6 +116,8 @@ export class Bird implements Updatable {
   private bodyMesh!: THREE.SkinnedMesh;
   private legs: { hip: THREE.Group; ankle: THREE.Group; sgn: number }[] = [];
   private wings: Wing[] = [];
+  // source skinned meshes (body + both wings) whose surfaces the splat coat samples
+  private coatSources: CoatSource[] = [];
   private phase = 0;
   private flapEnergy = 0;
   // eased body-morph state: the supple form lags the controller a touch, so the
@@ -176,6 +179,13 @@ export class Bird implements Updatable {
 
     // ---- legs: trailing, parented to the body bone so they stream behind ----
     this.buildLegs(legMat);
+
+    // ---- SPLAT COAT: a subtle painterly dab-coat over the whole bird (body + both
+    // wings + tail), sampled from the skins above and parented to the bird's bones so
+    // it deforms with the flap/fold. Built after the skins exist so their bind matrices
+    // and bone inverses are final. See birdSplats. Purely additive — the solid bird
+    // stays underneath. ----
+    buildBirdSplatCoat(this.coatSources);
 
     this.root.scale.setScalar(SCALE);
     this.root.traverse((o) => { o.frustumCulled = false; });
@@ -243,6 +253,10 @@ export class Bird implements Updatable {
     this.bob.add(mesh);
     mesh.bind(skeleton);
     this.bodyMesh = mesh;
+    // expose this skin as a coat-sampling source (bind() has filled boneInverses)
+    this.coatSources.push({
+      geo, boneInverses: skeleton.boneInverses, bindMatrix: mesh.bindMatrix, bones: skeleton.bones,
+    });
   }
 
   private buildEyes() {
@@ -310,6 +324,10 @@ export class Bird implements Updatable {
     mesh.add(shoulder);
     this.bob.add(mesh);
     mesh.bind(skeleton);
+    // expose this wing skin as a coat-sampling source
+    this.coatSources.push({
+      geo, boneInverses: skeleton.boneInverses, bindMatrix: mesh.bindMatrix, bones: skeleton.bones,
+    });
 
     return { shoulder, elbow, wrist, hand, sgn: side, springPos: 0, springVel: 0 };
   }
