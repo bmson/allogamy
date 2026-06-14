@@ -64,9 +64,14 @@ const SUN = new THREE.Vector3(...SUN_DIR).normalize();
 // INK for the wavering contour + the sparse hatch. Each is nudged toward the bird's
 // own albedo per-fragment so the fills keep the creature's identity (grey plumage
 // washes grey, the warm bill washes a warmer sepia).
-const PAPER = new THREE.Color('#f4f2ec');     // warm off-white drawing paper (light fill)
-const SHADOW = new THREE.Color('#9fa9b8');    // cool grey-blue ink-wash (shadow fill)
-const MIDWASH = new THREE.Color('#c9cdd2');   // optional mid fill between light & shadow
+const PAPER = new THREE.Color('#f6f4ee');     // warm off-white drawing paper (light fill)
+// The pelican should read as a LUMINOUS pale pearl-grey bird, so the SHADOW fill is
+// the most important tone to keep airy — it was reading too dark and dominating the
+// silhouette. Lifted to a brighter, less saturated dove-grey so the shaded side is a
+// soft wash, not a heavy slate. MIDWASH lifted to match so the light→mid→shadow
+// ladder stays bright and the bird never sinks toward the ink.
+const SHADOW = new THREE.Color('#b7c0cc');    // cool dove-grey ink-wash (shadow fill, lifted)
+const MIDWASH = new THREE.Color('#d8dce0');   // optional mid fill between light & shadow (lifted)
 const INK = new THREE.Color('#23232b');       // near-black contour / hatch ink
 const KEY_WARM = new THREE.Color('#fff0cf');  // scene's warm golden key (warms the lit fill)
 
@@ -99,7 +104,8 @@ const DEFAULTS: Required<Omit<BirdShadeOpts, 'emissiveTint'>> = {
   flatten: 0.92,        // STRONGLY flat: the shading snaps to hard fills, not a ramp
   bands: 3,             // light / mid / shadow — three flat ink-wash regions
   wrap: 0.55,           // soft underlying half-Lambert before it's posterised
-  shadeLift: 0.34,      // keep the shadow fill an open grey wash, never a black hole
+  shadeLift: 0.5,       // lift the shadow fill further toward the mid — a luminous pale
+                        //   bird whose shaded side stays an open, airy wash (was too dark)
   noiseScale: 5.5,      // object-space wash frequency (a few mottled patches per body)
   noiseStrength: 0.5,   // a confident watercolour/dry-ink mottle on every fill
   edgeWobble: 0.32,     // the terminator wavers like a hand-painted shadow edge
@@ -243,7 +249,10 @@ export function makeBirdMaterial(opts: BirdShadeOpts = {}): BirdMaterial {
   // light below, never from the bake.
   const rawAlbedo = vertexColor().rgb;
   const albLuma = dot(rawAlbedo, vec3(0.299, 0.587, 0.114));
-  const FLAT_VALUE = float(0.62);
+  // Re-seat the albedo's lightness to a bright constant. Lifted from 0.62 → 0.72 so
+  // the identity tint the fills take on is PALE pearl rather than a mid-grey that
+  // pulled the whole bird dark — the creature should glow as a luminous pale pelican.
+  const FLAT_VALUE = float(0.72);
   const albedo = rawAlbedo.div(max(albLuma, float(0.04))).mul(FLAT_VALUE);
 
   // --- OBJECT-SPACE WASH COORD ------------------------------------------------
@@ -321,8 +330,10 @@ export function makeBirdMaterial(opts: BirdShadeOpts = {}): BirdMaterial {
   // fill warms toward the golden key; the shadow fill stays a cool open grey.
   const tintLight = mix(paper, paper.mul(keyWarm), uPaperWarmth);
   const litFill = mix(tintLight, albedo, uTintIdentity.mul(0.5));
-  // shadow fill: cool wash, tinted toward a slightly darker version of the identity.
-  const shFill = mix(shadowCol, albedo.mul(0.72), uTintIdentity.mul(0.6));
+  // shadow fill: cool wash, tinted toward a only-slightly-darker version of the
+  // identity (0.85, was 0.72) so the shaded side keeps the bird's pale value and
+  // doesn't drag toward a dark albedo — the shadow stays a luminous cool wash.
+  const shFill = mix(shadowCol, albedo.mul(0.85), uTintIdentity.mul(0.6));
   // mid fill: between the two, tinted toward identity too.
   const mdFill = mix(midCol, albedo.mul(0.86), uTintIdentity.mul(0.55));
   // lift the shadow fill toward the mid by `shadeLift` so the dark side stays an OPEN

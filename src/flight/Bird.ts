@@ -40,19 +40,31 @@ const TAU = Math.PI * 2;
 // --- flap timing/feel ---
 const FLAP_FREQ = 0.42; // Hz — slow & deliberate (a big bird's unhurried beat)
 const DOWN_BIAS = 0.32; // asymmetry: loaded downstroke, lighter slower recovery
-const ELBOW_LAG = 0.85; // proximal→distal phase lag (radians of the flap cycle)
-const WRIST_LAG = 1.55;
+// Proximal→distal phase lag. Trimmed IN from (0.85, 1.55): too much tip lag reads as
+// a floppy whip rather than a strong wing — the wing should unroll with weight but
+// the primaries shouldn't trail so far behind that the membrane looks like loose
+// cloth. A tighter lag keeps the wing reading as one stiff, coordinated surface.
+const ELBOW_LAG = 0.7;
+const WRIST_LAG = 1.25;
 const BOB_LAG = 0.55;
 const TAIL_LAG = 1.1;
 
-// --- primary-tip spring (underdamped → trail & settle, the weighty overshoot) ---
-const STIFF_K = 46;
-const DAMP_C = 11.0;
+// --- primary-tip spring (still trails & settles for weight, but firmer) ---
+// Stiffer + better-damped than before (was K=46, C=11 → ζ≈0.81, a loose wobble that
+// read as flimsy). K=64, C=15.6 → ωn≈8, ζ≈0.975: a near-critically-damped, FIRM
+// settle that still gives the long primaries a touch of weighty trail/overshoot but
+// no rubbery oscillation. A strong wing flicks and holds; it doesn't wobble.
+const STIFF_K = 64;
+const DAMP_C = 15.6;
 
 // --- rest pose (radians) ---
-const REST_DIHEDRAL = 0.16; // shoulders held in a soft soaring V
-const REST_ELBOW = -0.2;
-const REST_WRIST = -0.16;
+// A strong soaring bird holds its wings SPREAD and firm on a glide. Slightly more
+// dihedral at the shoulder (the confident soaring V) but the elbow/wrist held closer
+// to straight (less fold) so the wing reads broad and extended at rest rather than
+// half-tucked — a powerful glider, not a bird mid-recovery.
+const REST_DIHEDRAL = 0.18; // shoulders held in a soft soaring V
+const REST_ELBOW = -0.12;
+const REST_WRIST = -0.1;
 
 const SCALE = 3.0;
 

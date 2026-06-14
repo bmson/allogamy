@@ -80,6 +80,26 @@ function barkColor(rnd: () => number, tone = 0): THREE.Color {
 
 const clamp = THREE.MathUtils.clamp;
 
+// Light-coupling tints — applied ON TOP of foliageColor's baked value so the
+// canopy reads as a lit volume, not a flat field of greens. These are gentle
+// HUE/value nudges (never multiplies toward black): the warm golden key warms &
+// brightens sun-facing leaves a touch, the cool sky-fill lifts top/rim leaves
+// toward a luminous blue-green, and a faint warm ground-bounce keeps the
+// undersides from going dead. The amounts are small so the green identity holds
+// and — crucially — nothing here can crush a dab toward near-black.
+const SUN_TINT = new THREE.Color('#fff0cf'); // matches palette.sun (warm key)
+const SKY_TINT = new THREE.Color('#bcd6ef'); // cool luminous sky fill
+const BOUNCE_TINT = new THREE.Color('#9bbf63'); // warm green ground bounce
+// `sunF` 0..1 how sun-facing, `skyF` 0..1 how sky-exposed (top/rim),
+// `bounceF` 0..1 how much warm ground light reaches the underside. Writes into
+// the SHARED `_col` in place (caller has just filled it via foliageColor).
+function coupleLight(c: THREE.Color, sunF: number, skyF: number, bounceF: number) {
+  if (sunF > 0) c.lerp(SUN_TINT, 0.14 * sunF);
+  if (skyF > 0) c.lerp(SKY_TINT, 0.1 * skyF);
+  if (bounceF > 0) c.lerp(BOUNCE_TINT, 0.09 * bounceF);
+  return c;
+}
+
 // Light-coupled foliage colour — the same technique that made the turf read:
 // the canopy's baked lighting (`lit`, 0 deep interior shade .. 1 sunlit crown)
 // drives hue AND lightness, so sunlit leaves warm toward lime and shaded leaves
@@ -164,6 +184,24 @@ function emitCylinder(
   const adx = _dir.x * slope, ady = _dir.y * slope, adz = _dir.z * slope;
   const { cx: rc, sx: rs } = ringTrig(segs);
   const cr = color.r, cg = color.g, cb = color.b;
+  // Bake bark light-coupling + vertical stria into the per-vertex colour: the
+  // sun-facing side of the bole reads warmer & a touch lighter, the back side
+  // cooler & a little deeper (never near-black — the swing is small and floored).
+  // A faint along-axis ripple adds the impression of vertical bark texture/ridges.
+  // Same world key direction the foliage uses (−x −z). NO per-vertex allocation:
+  // each vertex colour is pushed straight into `tc` from scalar locals.
+  const SUNX = -0.5, SUNZ = -0.62;
+  const pushBark = (rx: number, rz: number, axialT: number) => {
+    const face = clamp(rx * SUNX + rz * SUNZ, -1, 1); // +1 sun side .. −1 back
+    const ripple = Math.sin(axialT * 9.0 + rx * 4.0) * 0.04; // subtle vertical ridges
+    const lift = 1 + face * 0.18 + ripple; // ~0.78..1.22, floored well above black
+    const warm = face * 0.05; // lit side slightly warmer, back side slightly cool
+    tc.push(
+      clamp(cr * lift + warm, 0.02, 1),
+      clamp(cg * lift, 0.02, 1),
+      clamp(cb * lift - warm * 0.5, 0.015, 1),
+    );
+  };
 
   for (let i = 0; i < segs; i++) {
     const d0x = rc[i], d0y = rs[i];
@@ -184,7 +222,10 @@ function emitCylinder(
     tn.push(n0x, n0y, n0z, n0x, n0y, n0z, n1x, n1y, n1z);
     tp.push(A0x, A0y, A0z, B1x, B1y, B1z, A1x, A1y, A1z);
     tn.push(n0x, n0y, n0z, n1x, n1y, n1z, n1x, n1y, n1z);
-    for (let k = 0; k < 6; k++) tc.push(cr, cg, cb);
+    // per-vertex bark colour, in the SAME vertex order the positions were pushed
+    // (tri1: A0,B0,B1 — tri2: A0,B1,A1). A-ring uses axialT 0, B-ring axialT 1.
+    pushBark(r0x, r0z, 0); pushBark(r0x, r0z, 1); pushBark(r1x, r1z, 1); // tri 1
+    pushBark(r0x, r0z, 0); pushBark(r1x, r1z, 1); pushBark(r1x, r1z, 0); // tri 2
   }
 }
 
@@ -248,7 +289,13 @@ function emitBlob(
     // bigger, bolder leaf-strokes while the shaded interior fills with smaller,
     // denser dabs — a layered crown rather than uniform-sized confetti.
     const shell = Math.sqrt(ox * ox + oy * oy + oz * oz) * inv; // 0 core .. 1 rim
-    fs.push(baseScale * (0.7 + rnd() * scaleVar) * (0.86 + 0.24 * shell));
+    // Per-leaf role (also reused below to bias colour): a few proud highlight
+    // strokes sit smaller & crisper on the lit shell, a few deep leaves are
+    // slightly larger, softer masses sunk into the interior — varied dab size is
+    // a big part of the painterly leaf-stroke texture.
+    const leafRoll = rnd();
+    const sizeRole = leafRoll > 0.82 ? 0.82 : leafRoll < 0.16 ? 1.12 : 1.0;
+    fs.push(baseScale * (0.7 + rnd() * scaleVar) * (0.86 + 0.24 * shell) * sizeRole);
     // Leaf-clump dabs read as loose brush-marks: mostly round, but a fraction
     // are pulled into short oval strokes (aspect up to ~1.5) with a free
     // screen-space orientation so the crown shimmers as painted dabs, not discs.
@@ -259,9 +306,21 @@ function emitBlob(
     // rim catching light, interior in shade. No separate shade multiply.
     const topness = oy * inv * 0.5 + 0.5;
     const aoR = shell; // distance-from-core, already computed above
-    const sun = (ox * -0.5 + oz * -0.62) * inv;
-    const lit = clamp(0.32 + litBias + 0.42 * topness + 0.18 * aoR + 0.12 * sun, 0, 1);
+    const sun = (ox * -0.5 + oz * -0.62) * inv; // −1 shaded side .. +1 sun side
+    // Two-tone break-up (reusing the per-leaf role rolled above): highlight-catch
+    // leaves read a touch brighter, deep interior leaves a touch shaded — many
+    // distinct leaf-strokes rather than one even tone.
+    const highlight = leafRoll > 0.82 ? 0.12 : 0; // proud, light-catching leaf
+    const deepLeaf = leafRoll < 0.16 ? 0.14 : 0; // sunk, shaded interior leaf
+    const lit = clamp(0.32 + litBias + 0.42 * topness + 0.18 * aoR + 0.12 * sun + highlight - deepLeaf, 0, 1);
     const c = foliageColor(rnd, type, lit, warmth);
+    // Light coupling: warm key on the sun side, cool sky-fill on the top/rim,
+    // warm ground-bounce on the shaded underside. Gives the crown a true lit-form
+    // read (warm/cool gradient across the mass) without any darkening multiply.
+    const sunF = clamp(sun * 0.5 + 0.5 * topness, 0, 1);
+    const skyF = clamp(0.5 * topness + 0.5 * aoR, 0, 1);
+    const bounceF = clamp(-oy * inv, 0, 1) * (1 - aoR * 0.5);
+    coupleLight(c, sunF, skyF, bounceF);
     fc.push(c.r, c.g, c.b);
     // outer/upper leaves sway most
     fw.push(windBase * (0.5 + 0.5 * topness) * (0.7 + 0.5 * aoR));
@@ -498,6 +557,13 @@ function buildConifer(rnd: () => number): TreeProto {
       const sun = Math.cos(ang) * -0.5 + Math.sin(ang) * -0.62;
       const lit = clamp(0.24 + 0.44 * ff + 0.2 * aoR + 0.12 * sun, 0, 1);
       const c = foliageColor(rnd, 'conifer', lit, warmth);
+      // Light coupling on the spruce sprays: warm key on the sun-facing tips,
+      // cool sky-fill on the upper exposed tiers, faint warm bounce up into the
+      // lowest skirts. Subtle — conifers stay the deepest, coolest masses.
+      const sunF = clamp(sun * 0.5 + 0.5 * ff, 0, 1);
+      const skyF = clamp(0.6 * ff + 0.4 * aoR, 0, 1);
+      const bounceF = clamp((0.3 - ff) * 2, 0, 1) * 0.6;
+      coupleLight(c, sunF, skyF, bounceF);
       fc.push(c.r, c.g, c.b);
       fw.push(0.5 * (0.3 + 0.7 * ff)); // conifers are stiffer; tips sway a little
       fa.push(ang + Math.PI / 2 + (rnd() - 0.5) * 0.6); // sprays radiate from the spire

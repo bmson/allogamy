@@ -12,7 +12,7 @@
 
 import type { Engine } from '../core/Engine';
 import {
-  uGlow, uImpasto, uChroma, uVignette, uBleed, uPaperTex,
+  uGlow, uImpasto, uChroma, uVignette, uBleed, uPaperTex, uGrainScale, uWeave,
   uStrokeBias, uSizeFloor, uWind, uSizeJitter, uAngleJitter,
   uFogNear, uFogFar,
   jsSettings, snapshot,
@@ -142,6 +142,16 @@ export class Controls {
             id: 'paperTex', label: 'noise', min: 0, max: 0.8, step: 0.01, decimals: 2,
             get: () => uPaperTex.value as number,
             set: (v) => { uPaperTex.value = v; },
+          },
+          {
+            id: 'grainScale', label: 'grain scale', min: 0.25, max: 3, step: 0.05, decimals: 2,
+            get: () => uGrainScale.value as number,
+            set: (v) => { uGrainScale.value = v; },
+          },
+          {
+            id: 'weave', label: 'weave', min: 0, max: 1, step: 0.01, decimals: 2,
+            get: () => uWeave.value as number,
+            set: (v) => { uWeave.value = v; },
           },
         ],
       },
@@ -341,6 +351,8 @@ export class Controls {
       `export const uFogFar = uniform(${s.fogFar});       // fog far  (or set config.FOG_FAR)`,
       `export const uBleed = uniform(${s.bleed});       // post.ts oil-paint bleed`,
       `export const uPaperTex = uniform(${s.paperTex});    // post.ts canvas/paper noise grain`,
+      `export const uGrainScale = uniform(${s.grainScale});  // post.ts canvas-tooth frequency scale`,
+      `export const uWeave = uniform(${s.weave});       // post.ts directional canvas-weave strength`,
       `export const uSizeJitter = uniform(${s.sizeJitter});   // SplatMaterial per-stamp size jitter`,
       `export const uAngleJitter = uniform(${s.angleJitter});  // SplatMaterial per-stamp angle jitter`,
       '// src/core/settings.ts jsSettings (+ mirror in config.ts / Engine.ts):',

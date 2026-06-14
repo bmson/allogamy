@@ -59,8 +59,14 @@ export class FlightController {
     const cp = Math.cos(this.pitch);
     this.forward.set(Math.sin(this.yaw) * cp, Math.sin(this.pitch), Math.cos(this.yaw) * cp).normalize();
 
-    // Dive accelerates, climb bleeds speed.
-    const speed = this.baseSpeed * (1 - this.pitch * 0.85);
+    // Energy trade, ASYMMETRIC: a dive trades altitude for real speed (strong
+    // accel), but a climb only bleeds gently — a powerful soaring bird carries its
+    // momentum UP the slope rather than mushing into a stall. Diving (pitch < 0)
+    // keeps the old steep -0.85 gain; climbing (pitch > 0) uses a much milder 0.22
+    // bleed, and the whole thing is held above a healthy floor so a sustained climb
+    // never feels like it's slowing to a crawl.
+    const trade = this.pitch < 0 ? 0.85 : 0.22; // steep on the dive, gentle on the climb
+    const speed = Math.max(this.baseSpeed * 0.72, this.baseSpeed * (1 - this.pitch * trade));
     this.position.addScaledVector(this.forward, speed * dt);
 
     // Never sink into the ground; ease the nose back up if we bottom out.

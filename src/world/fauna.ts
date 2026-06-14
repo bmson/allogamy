@@ -494,8 +494,12 @@ export function scatterFauna(field: TerrainField, cx: number, cz: number): Chunk
   // Gate FIRST and cheaply: only ~1 in 7 chunks holds any grazing animals, and
   // ~1 in 14 a far bird. This single early-out keeps the common case ≈ free.
   const hasGrazers = rnd() < 0.14;
-  const hasBird = rnd() < 0.07;
-  if (!hasGrazers && !hasBird) return null;
+  // Ambient wheeling birds have been REMOVED — the only bird in the scene is the
+  // player's pelican. We still consume the old "far bird" rng draw here so the
+  // grazer placement below stays byte-identical to before. (The bird builders are
+  // left in the file, unused, so the wheeling bird can be restored trivially.)
+  rnd();
+  if (!hasGrazers) return null;
 
   const S = CHUNK_SIZE;
   const ox = cx * S;
@@ -567,51 +571,13 @@ export function scatterFauna(field: TerrainField, cx: number, cz: number): Chunk
     }
   }
 
-  // ---- a lone bird wheeling slowly, far overhead ----
-  let birdYaw: THREE.Group | null = null;
-  let birdWingL: THREE.Group | null = null;
-  let birdWingR: THREE.Group | null = null;
-  let birdSpeed = 0, birdPhase = 0;
-  if (hasBird) {
-    const bird = birdProto(); // shared, built once
-    const bmat = birdMat();
-
-    // a yaw group centred over the chunk; the bird sits at the rim and circles
-    birdYaw = new THREE.Group();
-    const baseH = field.height(ox + S * 0.5, oz + S * 0.5);
-    birdYaw.position.set(ox + S * 0.5, baseH + 120 + rnd() * 90, oz + S * 0.5);
-    root.add(birdYaw);
-
-    const offset = new THREE.Group(); // pushes the bird out to the orbit radius
-    offset.position.set(60 + rnd() * 60, 0, 0);
-    offset.rotation.y = -Math.PI / 2; // face along the tangent of the circle
-    birdYaw.add(offset);
-
-    const flier = new THREE.Group();
-    flier.scale.setScalar(2.0 + rnd() * 1.0);
-    flier.rotation.z = 0.18; // gentle bank into the turn
-    offset.add(flier);
-
-    flier.add(new THREE.Mesh(bird.body, bmat));
-    birdWingL = new THREE.Group();
-    birdWingL.add(new THREE.Mesh(bird.wingL, bmat));
-    flier.add(birdWingL);
-    birdWingR = new THREE.Group();
-    birdWingR.add(new THREE.Mesh(bird.wingR, bmat));
-    flier.add(birdWingR);
-
-    birdSpeed = (rnd() < 0.5 ? 1 : -1) * (0.05 + rnd() * 0.05); // rad/s, slow
-    birdPhase = rnd() * Math.PI * 2;
-    placed++;
-  }
-
   if (placed === 0) {
     // built nothing usable (e.g. herd ground all rejected) — nothing to free
     return null;
   }
 
   // gentle, cheap per-frame animation: a few group transforms, no per-vertex work
-  const hasAnim = grazers.length > 0 || birdYaw !== null;
+  const hasAnim = grazers.length > 0;
   const update = hasAnim
     ? (time: number) => {
         for (const g of grazers) {
@@ -626,12 +592,6 @@ export function scatterFauna(field: TerrainField, cx: number, cz: number): Chunk
           g.tailPivot.rotation.z = Math.sin(t * 0.9) * 0.1;
           // faint breathing: the flank swells a hair (cheap single sin → scalar)
           g.body.scale.y = 1 + Math.sin(t * 1.6) * 0.015;
-        }
-        if (birdYaw) {
-          birdYaw.rotation.y = birdPhase + time * birdSpeed; // wide slow circle
-          const flap = Math.sin(time * 1.1 + birdPhase); // slow wingbeat
-          if (birdWingL) birdWingL.rotation.z = 0.18 + flap * 0.28;
-          if (birdWingR) birdWingR.rotation.z = -0.18 - flap * 0.28;
         }
       }
     : undefined;

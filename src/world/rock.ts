@@ -7,7 +7,11 @@ import { TerrainField } from './TerrainField';
 // for a crisp carved read, settled (partly embedded) into the ground. Two shapes:
 // scattered lone stones and clustered outcrops where several boulders heap together.
 // Forms get bedding strata, fractured planar facets and lumpy mass so silhouettes
-// vary; colour bakes a warm sunlit face / cool shaded crevice / mossy crown gradient
+// vary, with an optional flat-topped TABULAR slab archetype mixed in (broad low
+// resting stones) so a field reads as varied rock rather than repeated round lumps.
+// Stones bed into the terrain SLOPE — tilted back into the hillside and sunk deeper
+// on steep ground so they nestle in rather than perch on their downhill rim.
+// Colour bakes a warm sunlit face / cool shaded crevice / mossy crown gradient
 // plus cavity AO so the stone reads with depth even before the scene light hits it.
 // All boulders in a chunk merge into one geometry → a single draw call.
 //
@@ -83,8 +87,15 @@ interface BoulderResult {
 
 // One boulder, authored at the origin then transformed by the caller. radius sets
 // the rough size; `angular` (0..1) biases the silhouette from rounded river-stone
-// toward jagged fractured rock.
-function makeBoulder(rnd: () => number, radius: number, angular: number): BoulderResult {
+// toward jagged fractured rock; `tabular` (0..1) biases the mass from a compact
+// lump toward a flat-topped tabular SLAB — the broad, low resting stones that give
+// an outcrop its varied silhouette instead of a field of look-alike blobs.
+function makeBoulder(
+  rnd: () => number,
+  radius: number,
+  angular: number,
+  tabular: number,
+): BoulderResult {
   // LOD: pebbles & small stones (the common case, thanks to the squared size bias)
   // get away with detail 1 — a quarter of the triangles — because their facets are
   // tiny on screen. Only larger boulders need detail 2 for a convincing carved mass.
@@ -95,9 +106,11 @@ function makeBoulder(rnd: () => number, radius: number, angular: number): Boulde
 
   // --- form parameters -----------------------------------------------------
   // Non-uniform mass: boulders are wider than tall (settled) and asymmetric.
-  const sx = 0.86 + rnd() * 0.55;
-  const sy = 0.5 + rnd() * 0.32; // squashed vertically → sits low
-  const sz = 0.86 + rnd() * 0.55;
+  // `tabular` pushes the stone toward a broad, low slab: wider footprint, much
+  // flatter profile. This is the main lever for silhouette VARIETY across a field.
+  const sx = (0.86 + rnd() * 0.55) * (1 + tabular * 0.7);
+  const sy = (0.5 + rnd() * 0.32) * (1 - tabular * 0.5); // squashed vertically → sits low
+  const sz = (0.86 + rnd() * 0.55) * (1 + tabular * 0.7);
   // A lateral lean so it doesn't read axis-aligned.
   const leanX = (rnd() - 0.5) * 0.3;
   const leanZ = (rnd() - 0.5) * 0.3;
@@ -122,6 +135,9 @@ function makeBoulder(rnd: () => number, radius: number, angular: number): Boulde
   const clInv = 1 / (Math.hypot(cleaveX, cleaveY, cleaveZ) || 1);
   const cnx = cleaveX * clInv, cny = cleaveY * clInv, cnz = cleaveZ * clInv;
   const cleaveAmt = 0.22 * angular * angular; // only the jagged stones cleave
+  // Flat resting top: tabular slabs get their crown sheared toward a level plane,
+  // the worn upper face of a bedded slab. Strength scales with `tabular`.
+  const topFlat = 0.5 * tabular;
 
   for (let k = 0; k < count; k++) {
     const dx = dirs[k * 3], dy = dirs[k * 3 + 1], dz = dirs[k * 3 + 2];
@@ -163,6 +179,13 @@ function makeBoulder(rnd: () => number, radius: number, angular: number): Boulde
 
     // Flatten the underside slightly so it sits, not floats.
     if (vy < 0) vy *= 0.7;
+    // Tabular slabs: shear the upper dome down toward a level crown so the stone
+    // reads as a flat-topped bedded slab rather than a dome. Pulls only the top
+    // half, easing in with height so the flank still rounds over to the edge.
+    if (topFlat > 0 && vy > 0) {
+      const t = THREE.MathUtils.smoothstep(dy, 0.15, 0.85); // how "up" this vert is
+      vy *= 1 - topFlat * t;
+    }
 
     pos[k * 3] = vx; pos[k * 3 + 1] = vy; pos[k * 3 + 2] = vz;
   }
@@ -205,8 +228,10 @@ function makeBoulder(rnd: () => number, radius: number, angular: number): Boulde
     else _c.lerp(STONE_COOL, -sunDot * 0.3);
 
     // Cavity / contact AO: darken low + downward-facing geometry (crevices, base).
+    // Floor kept high (0.58) so undersides stay OPEN — a luminous painted shade, not
+    // a crushed black hole, in keeping with the Ghibli "shadows are never black" feel.
     const hn = THREE.MathUtils.clamp(fy / topY * 0.5 + 0.5, 0, 1); // 0 base .. 1 crown
-    const ao = THREE.MathUtils.clamp(0.55 + hn * 0.4 + Math.max(0, up) * 0.18, 0.45, 1.12);
+    const ao = THREE.MathUtils.clamp(0.66 + hn * 0.34 + Math.max(0, up) * 0.16, 0.58, 1.12);
     _c.multiplyScalar(ao);
     // Deepen true undersides into the blue-violet crevice tone.
     if (up < -0.1) _c.lerp(STONE_COOL, (-up) * 0.4 * (1 - hn));
@@ -239,16 +264,32 @@ function placeBoulder(
   z: number,
   radius: number,
   angular: number,
+  tabular: number,
   acc: { pos: Float32Array[]; col: Float32Array[] },
 ): number {
-  const b = makeBoulder(rnd, radius, angular);
+  const b = makeBoulder(rnd, radius, angular, tabular);
 
-  // Embed deeper for big boulders so they look bedded, not dropped.
-  const embed = radius * (0.34 + rnd() * 0.22);
-  const y = field.height(x, z) - embed;
+  // Embed deeper for big boulders so they look bedded, not dropped. On a SLOPE a
+  // stone with a level base would perch on its downhill rim, so we sink it further
+  // the steeper the ground (its uphill flank buries while the downhill flank shows).
+  const surf = field.surface(x, z);
+  const embed = radius * (0.34 + rnd() * 0.22 + surf.slope * 0.45);
+  // Tabular slabs are flatter, so the same embed fraction would swallow them —
+  // ease their sink so the broad top stays proud of the turf.
+  const y = field.height(x, z) - embed * (1 - tabular * 0.35);
 
-  // Random yaw + a little tilt so it follows no axis.
-  _e.set((rnd() - 0.5) * 0.5, rnd() * Math.PI * 2, (rnd() - 0.5) * 0.5);
+  // Bed into the hillside: tilt the stone so its "up" leans with the terrain
+  // normal (lain stones lie BACK into the slope, never axis-vertical on a hill),
+  // then add a little extra random wobble so none reads machine-placed. Tabular
+  // slabs lie almost flush with the ground; lumps keep more free wobble.
+  const slopeTiltX = surf.nz * (0.9 - tabular * 0.3); // tilt about X follows dz of normal
+  const slopeTiltZ = -surf.nx * (0.9 - tabular * 0.3);
+  const wob = 0.35 - tabular * 0.22;
+  _e.set(
+    slopeTiltX + (rnd() - 0.5) * wob,
+    rnd() * Math.PI * 2,
+    slopeTiltZ + (rnd() - 0.5) * wob,
+  );
   _q.setFromEuler(_e);
   _s.setScalar(1);
   _t.set(x, y, z);
@@ -295,7 +336,10 @@ export function buildBoulders(
     const radius = 0.7 + rnd() * rnd() * 5.5;
     // Smaller stones rounder (tumbled); bigger ones more fractured/angular.
     const angular = THREE.MathUtils.clamp(0.25 + radius * 0.12 + (rnd() - 0.5) * 0.4, 0, 1);
-    total += placeBoulder(field, rnd, x, z, radius, angular, acc);
+    // Roughly a quarter become flat-topped resting slabs (squared bias keeps most
+    // of those modest) — broad low stones break up a field of round lumps.
+    const tabular = rnd() < 0.28 ? rnd() * rnd() * 0.9 + 0.1 : 0;
+    total += placeBoulder(field, rnd, x, z, radius, angular, tabular, acc);
   }
 
   // ---- clustered outcrops --------------------------------------------------
@@ -323,7 +367,10 @@ export function buildBoulders(
       // The first stone is the big one; the rest are smaller satellites.
       const radius = j === 0 ? big : big * (0.3 + rnd() * 0.55);
       const angular = THREE.MathUtils.clamp(0.45 + (rnd() - 0.3) * 0.5, 0, 1);
-      total += placeBoulder(field, rnd, bx, bz, radius, angular, acc);
+      // Outcrops mix lumps with the odd broad slab tilted across the heap, so the
+      // mass reads as fractured strata rather than a pile of identical cobbles.
+      const tabular = rnd() < 0.35 ? rnd() * 0.7 + 0.15 : 0;
+      total += placeBoulder(field, rnd, bx, bz, radius, angular, tabular, acc);
     }
   }
 

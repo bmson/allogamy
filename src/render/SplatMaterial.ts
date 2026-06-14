@@ -126,7 +126,25 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   const air = smoothstep(uFogNear, uFogFar, depth);
   const lum = aColor.dot(vec3(0.299, 0.587, 0.114));
   const greyed = mix(aColor, vec3(lum, lum, lum), air.mul(0.35));
-  mat.colorNode = vertexStage(mix(greyed, fogCol, air.mul(0.72)));
+  const graded = vertexStage(mix(greyed, fogCol, air.mul(0.72)));
+
+  // ---- LOADED-BRUSH TOOTH (per-fragment, cheap) ----------------------------
+  // A smooth gaussian dab reads like airbrush; real loaded-brush paint shows
+  // fine bristle streaks running ALONG the stroke plus a touch of grain. We add
+  // a couple of instructions: ridged streaks across the stroke WIDTH (r.x) that
+  // run down its length, phase-offset per stamp by `seed`, lightly broken up by
+  // the per-band `bristle` hash already computed above. The result is a faint
+  // ±value modulation of the pigment — pigment thins on the raised bristle lines
+  // and pools between them — so dense strokes look hand-loaded, not smooth.
+  // This rides the COLOUR, not the alpha, so it never perturbs alphaTest / the
+  // size-floor (the feathered-rim → depth contract in opacityNode is untouched).
+  // It also fades out toward the rim (via 1-d) so only the painted body is
+  // textured, keeping edges clean where dabs overlap and blend.
+  const streak = sin(r.x.mul(9.0).add(seed.mul(6.2831))); // ridges across width, -1..1
+  const body = float(1.0).sub(d).max(0.0); // 1 at core → 0 at rim
+  // bristle is ~[0,1] per length-band; recentre to ±0.5 so it darkens/lightens.
+  const tooth = streak.mul(0.6).add(bristle.sub(0.5)).mul(0.085).mul(body);
+  mat.colorNode = graded.mul(float(1.0).add(tooth));
 
   return mat;
 }

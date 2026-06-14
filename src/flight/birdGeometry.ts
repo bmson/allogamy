@@ -856,11 +856,23 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
     const rootFair0 = smoothstep(0.46, 0.0, t);
     const chord = lerp(0.6, 0.12, smoothstep(0.0, 1.0, t)) * (1 - 0.18 * smoothstep(0.7, 1.0, t))
       * (1 + 0.42 * rootFair0); // broaden the root chord → a wide fillet of overlap
-    const thick = lerp(0.05, 0.006, t);
+    // Thickness: a STIFF arm tapering to a thin flight-feather blade. The inner wing
+    // is kept appreciably fatter than before so the arm/spar reads as a solid limb,
+    // not a wafer — a thin sheet is exactly what reads as "flimsy".
+    const thick = lerp(0.06, 0.007, smoothstep(0.0, 1.0, t));
     // leading edge sweeps back & bows forward (a smooth curve)
     const le = lerp(0.2, -0.18, t) + 0.05 * Math.sin(t * Math.PI);
-    // whole-wing droop + gull bow at the tip
-    const droopBase = -0.05 * t * t;
+    // WHOLE-WING SPANWISE SHAPE — a held GULL BOW, not a limp droop. A real soaring
+    // pelican wing rises slightly off the shoulder (the inner arm carries a touch of
+    // positive dihedral), is held nearly flat & strong through the mid-span (the
+    // arm/elbow plane that HOLDS its airfoil), and only the long primary hand sweeps
+    // gently down at the very tip. So the section is a shallow S: up a hair at the
+    // arm, level across the middle, easing down past the wrist — a structured bow the
+    // wing keeps, rather than a sheet sagging under its own weight. This is baked rest
+    // shape; the flap bones add the live motion on top.
+    const gullArm = 0.05 * smoothstep(0.0, 0.42, t) * (1 - smoothstep(0.42, 0.7, t)); // arm lifts
+    const tipFall = -0.07 * smoothstep(0.6, 1.0, t) * smoothstep(0.6, 1.0, t);          // hand eases down
+    const droopBase = gullArm + tipFall;
     // ROOT FAIRING: blend the inner membrane INTO the shoulder haunch of the body.
     // Over the inner span the root is pulled HARD toward the body centre-line (so its
     // span collapses onto the shoulder pivot — the deepest, fattest root sits AT the
@@ -901,8 +913,25 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
       // the root surface sits near the body surface there is solid overlap and no
       // thin membrane edge can show against the flank. Tapers out to the thin flight
       // feathers by the time the wing emerges.
-      const th = thick * thFactor * (0.4 + 0.6 * camberShape) + rootFair2 * 0.05 + armBulk;
-      const camber = 0.55 * thick * camberShape * (1 - 0.3 * t);
+      // LEADING-EDGE SPAR: a stiff rounded thickening along the front of the wing
+      // (low v) that runs the WHOLE span — the structural bone the membrane hangs off.
+      // It fattens the cross-section at the leading edge (a rounded front), so the wing
+      // reads as a strong arm with a defined front spar rather than a uniform wafer.
+      // Because a fat rounded edge inks only its true silhouette (like the body does),
+      // it kills the grazing-angle "cut-out card" read that made the wing look papery.
+      const spar = 0.022 * smoothstep(0.32, 0.0, v) * (0.55 + 0.45 * (1 - t)); // fattest at LE, eases out the span
+      const th = thick * thFactor * (0.4 + 0.6 * camberShape) + rootFair2 * 0.05 + armBulk + spar;
+      // CAMBER that HOLDS its airfoil across the span. The old camber scaled with
+      // `thick`, so it collapsed to nothing outboard and the wing went flat & floppy.
+      // Now it is a near-constant chordwise arch (a real cambered aerofoil) that only
+      // gently shallows toward the tip — so the wing keeps a believable curved section
+      // along its whole length instead of flattening into paper. Scaled by chord so the
+      // broad inner wing carries the deepest arch.
+      // IMPORTANT: the arch is SUPPRESSED over the buried root (1 - 0.75*rootFair) so it
+      // can't lift the root surface up out of the shoulder haunch (which would re-open
+      // the very seam the burial closes). The full airfoil arch develops only as the
+      // wing emerges as a free membrane — exactly where it needs to read as a held wing.
+      const camber = chord * 0.16 * camberShape * (1 - 0.35 * t) * (1 - 0.75 * rootFair);
       let y = camber + droopBase - 0.02 * v * t;
       // fair the root DOWN into the flank so the membrane sinks deep into the haunch
       // (it disappears into the swell rather than meeting it at a hard line). The
@@ -974,11 +1003,19 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
     c.lerp(C_FEATHER_SHADE, (1 - covertBands) * 0.14 * (1 - primary) * smoothstep(0.15, 0.6, trail01));
 
     // --- primary feather stripes: along the outer wing each primary is a long
-    // shaft separated by a shadowed gap; pale sunlit lip on the trailing rim ---
-    const primBand = 0.5 + 0.5 * Math.cos(tspan * Math.PI * 2 * WING_PRIMARIES);
+    // distinct shaft separated by a shadowed gap — the FANNED soaring fingers. The
+    // band phase is matched to the geometry's cut fingers (primPhase in buildWingSkin,
+    // smoothstep(0.45,1) * WING_PRIMARIES over the span) so the painted shafts line up
+    // with the actual notched fingers instead of drifting across them. The bands are
+    // sharpened (a power curve) so each primary reads as a crisp, separated feather
+    // that fans, rather than a soft blurred stripe that flops.
+    const primT = smoothstep(0.45, 1.0, tspan) * WING_PRIMARIES; // matches the geometry fingers
+    const primRaw = 0.5 + 0.5 * Math.cos(primT * Math.PI * 2);   // 1 on a shaft, 0 in a gap
+    const primShaft = Math.pow(primRaw, 0.7);                    // crisp the shaft
+    const primGap = Math.pow(1 - primRaw, 0.7);                  // crisp the gap
     if (primary > 0.2) {
-      c.lerp(C_FEATHER_SHADE.clone().multiplyScalar(0.8), (1 - primBand) * primary * 0.35); // gaps
-      c.lerp(C_PRIMARY_EDGE, primBand * smoothstep(0.5, 1.0, tspan) * 0.35); // shaft sheen
+      c.lerp(C_FEATHER_SHADE.clone().multiplyScalar(0.7), primGap * primary * 0.45); // dark gaps between fingers
+      c.lerp(C_PRIMARY_EDGE, primShaft * smoothstep(0.5, 1.0, tspan) * 0.4); // shaft sheen
     }
 
     // pale feather lip along the very trailing edge (catches the sun)
