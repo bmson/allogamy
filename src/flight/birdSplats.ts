@@ -40,16 +40,22 @@ import {
 // units, pre-SCALE). DAB_SCALE is the dab half-size in those same local units. A
 // light coat: enough overlap to soften edges + shimmer, sparse enough that the solid
 // pelican reads clearly through it.
-const DENSITY = 1050;       // dabs per unit² — dense enough that the soft-feathered marks
-//                             BLEND into a continuous painted surface (like the meadow),
-//                             not sparse opaque patches.
-const DAB_SCALE = 0.155;    // dab world half-size — kept small so dabs sit as brush marks
-//                             ON the form and don't puff off the silhouette into fuzz.
-const DAB_ASPECT = 2.0;     // elongate each dab into an oval STROKE (like the meadow splats), not a circle
-const DAB_SIZE_JITTER = 0.35; // ± fraction of per-dab size variation
-const COAT_OPACITY = 0.9;   // near-opaque CORE with a soft feathered RIM that blends, so the
-//                             surface reads as one painted skin (not see-through, not foam).
-const SHIMMER = 0.16;       // faint animated dab wobble amplitude (NOT wind sway)
+// SCALE/DENSITY are tuned together so the coat reads as the SAME painterly surface as
+// the meadow — BIG soft gaussian dabs that overlap and MELT into a continuous painted
+// skin — rather than a mat of tiny tight marks (which read as "wool"/fleece). The
+// meadow's carpet is large, soft, overlapping splats; the bird coat now mirrors that
+// at bird scale: each dab is ~2× larger, laid at ~⅓ the density (so total coverage and
+// cost stay similar), and feathered wider so neighbouring dabs fuse instead of pilling.
+const DENSITY = 340;        // dabs per unit² — sparser, because each dab now covers much
+//                             more area; overlap still high enough to blend into a surface.
+const DAB_SCALE = 0.31;     // dab world half-size — BIG soft gaussians (was 0.155). Larger,
+//                             broader marks sit like the meadow's brushwork instead of
+//                             reading as tiny curls / a woolly fleece.
+const DAB_ASPECT = 1.7;     // elongate each dab into an oval STROKE (like the meadow splats), not a circle
+const DAB_SIZE_JITTER = 0.4; // ± fraction of per-dab size variation (broader range → organic)
+const COAT_OPACITY = 0.82;  // soft CORE with a wide feathered RIM that blends, so dense big
+//                             dabs fuse into one painted skin (not see-through, not pilled).
+const SHIMMER = 0.14;       // faint animated dab wobble amplitude (NOT wind sway)
 const SEED = 0x9e3779b9;
 
 // deterministic PRNG so the coat is identical every load (no flicker between runs)
@@ -191,7 +197,8 @@ function makeCoatMaterial(): THREE.MeshBasicNodeMaterial {
   mat.transparent = true;
   mat.depthWrite = true;
   mat.depthTest = true;
-  mat.alphaTest = 0.34; // discard the faint outer rim → soft feathered overlap, cores blend
+  mat.alphaTest = 0.22; // low cut → a WIDE soft feathered rim survives, so big neighbouring
+  //                       dabs melt into one continuous painted skin (less defined = less wool)
 
   const aCenter = attribute('aCenter', 'vec3');
   const aScale = attribute('aScale', 'float');
@@ -222,14 +229,18 @@ function makeCoatMaterial(): THREE.MeshBasicNodeMaterial {
     sin(r.y.mul(6.0).floor().mul(127.1).add(seed.mul(91.0).floor().mul(311.7))).mul(43758.5453),
   );
   const d = r.dot(r).mul(float(1.0).add(bristle.sub(0.5).mul(0.2)));
-  // Soft feathered gaussian (meadow-matched): opaque core melting to a wide blended rim,
-  // so dense marks fuse into a painted surface. alphaTest culls the empty rim (d≳1).
-  mat.opacityNode = smoothstep(float(1.0), float(0.45), d).mul(COAT_OPACITY);
+  // Soft feathered gaussian (meadow-matched): soft core melting to a WIDE blended rim,
+  // so dense big marks fuse into a painted surface. The feather is widened (smoothstep
+  // 1.0→0.25, was →0.45) so the falloff is gentle and overlapping dabs dissolve into one
+  // another instead of stacking as separate pills. alphaTest culls the empty rim (d≳1).
+  mat.opacityNode = smoothstep(float(1.0), float(0.25), d).mul(COAT_OPACITY);
 
-  // loaded-brush tooth (rides the colour, fades to the rim) — same as the meadow.
+  // loaded-brush tooth (rides the colour, fades to the rim) — same as the meadow, but
+  // EASED (0.055, was 0.085): the strong bristle streak is what made the small dabs read
+  // as fibrous wool, so on the big soft dabs we keep only a whisper of tooth.
   const streak = sin(r.x.mul(9.0).add(seed.mul(6.2831)));
   const body = float(1.0).sub(d).max(0.0);
-  const tooth = streak.mul(0.6).add(bristle.sub(0.5)).mul(0.085).mul(body);
+  const tooth = streak.mul(0.6).add(bristle.sub(0.5)).mul(0.055).mul(body);
   mat.colorNode = aColor.mul(float(1.0).add(tooth));
 
   return mat;
