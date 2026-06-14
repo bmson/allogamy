@@ -207,19 +207,21 @@ export class Chunk {
           // tall thin OVAL blades poking out of the carpet (same painterly stamp,
           // just elongated + upright; the wind wobble sways them like real grass).
           // Reshapes existing dabs, so no extra instances.
-          if (rnd() < 0.16) {
-            // stray grass STRANDS — super-thin tall blades, a touch darker than the turf.
-            cc.multiplyScalar(0.8); // slightly darker than the surrounding ground
-            scale = 0.22 + rnd() * 0.22; // super thin (narrow width)
-            aspect = 4.0 + rnd() * 3.0; // very tall thin oval = a strand
-            angle = 0; // upright; the wind wobble sways it
-            yoff = 1.0 + rnd() * 2.2; // rises out of the turf
-            wind = 0.5 + rnd() * 0.25; // sways a touch more
+          if (rnd() < 0.18) {
+            // stray grass STRANDS — thin upright blades, but with WIDE variation in
+            // size, shape, height and tone so no two read alike (a touch darker than turf).
+            cc.multiplyScalar(0.66 + rnd() * 0.3); // varied darker tone per blade
+            scale = 0.16 + rnd() * 0.4; // SIZE: super-thin → medium
+            aspect = 2.5 + rnd() * rnd() * 6.5; // SHAPE: mostly tall-thin, some very tall, a few stubbier
+            angle = (rnd() - 0.5) * 0.45; // slight per-blade lean (the wind wobble adds more)
+            yoff = 0.5 + rnd() * rnd() * 3.8; // HEIGHT: biased short, the odd tall blade poking up
+            wind = 0.45 + rnd() * 0.35;
           } else {
-            scale = 1.0 + rnd() * 1.1;
-            aspect = rnd() < 0.4 ? 1.3 + rnd() * 0.9 : 0.9 + rnd() * 0.3;
-            yoff = 0.5 + rnd() * 1.1;
-            wind = 0.4 + rnd() * 0.15;
+            // round-ish turf dabs, also more varied in size/shape/height
+            scale = 0.8 + rnd() * 1.4;
+            aspect = rnd() < 0.4 ? 1.2 + rnd() * 1.2 : 0.85 + rnd() * 0.4;
+            yoff = 0.4 + rnd() * 1.4;
+            wind = 0.4 + rnd() * 0.18;
           }
         }
       } else if (watery) {
