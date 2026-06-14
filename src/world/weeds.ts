@@ -173,6 +173,32 @@ export function scatterWeeds(field: TerrainField, cx: number, cz: number): Chunk
     }
   };
 
+  // A few tiny bright florets nestled into a cushion — clover heads, daisies,
+  // speedwell-blue specks: low ground-level flower colour that lifts the plush
+  // cover without competing with the taller wildflower patches (flowers.ts). These
+  // are small round dabs sitting just above the cushion crown, drifting in a
+  // coherent colour per clump so they read as one little flowering plant.
+  const floret = (x: number, y: number, z: number, spread: number, lit: number) => {
+    const n = 2 + Math.floor(rnd() * 4);
+    const pick = rnd();
+    // dominant ground-flower family for this clump
+    const base = pick < 0.34 ? palette.flowerWhite
+      : pick < 0.58 ? palette.flowerYellow
+      : pick < 0.78 ? palette.flowerLavender
+      : palette.blossom;
+    for (let i = 0; i < n; i++) {
+      const a = rnd() * Math.PI * 2;
+      const rr = spread * (0.2 + rnd() * 0.7);
+      _col.copy(base).offsetHSL((rnd() - 0.5) * 0.04, (rnd() - 0.5) * 0.08, (rnd() - 0.5) * 0.08 + (lit - 0.5) * 0.1);
+      cen.push(x + Math.cos(a) * rr, y + 0.34 + rnd() * 0.28, z + Math.sin(a) * rr);
+      scl.push(0.34 + rnd() * 0.3); // small bright specks
+      col.push(_col.r, _col.g, _col.b);
+      wnd.push(0.4 + rnd() * 0.25);
+      ang.push(rnd() * Math.PI);
+      asp.push(0.92 + rnd() * 0.16); // round
+    }
+  };
+
   // A small grounding shadow smear under an upright clump (flat, still, offset
   // away from the sun) so vertical accents read as rooted.
   const rootShadow = (x: number, y: number, z: number, r: number) => {
@@ -241,6 +267,13 @@ export function scatterWeeds(field: TerrainField, cx: number, cz: number): Chunk
       const spread = cs * (0.4 + rnd() * 0.5);
       const cnt = 3 + Math.floor(rnd() * 4 + want * 3);
       tuft(x, y, z, tuftScale, spread, cnt, lit, damp, dry, 0.5 + rnd() * 0.2, fresh);
+
+      // Some cushions in open, sunlit grass carry a little knot of ground florets —
+      // clover / daisies / speedwell — for low colour. Suppressed in deep shaded
+      // woodland (forest floor stays leafy) and on dry ridge straw.
+      if (forest < 0.5 && lit > 0.45 && rnd() < 0.16 + lit * 0.12 - dry * 0.1) {
+        floret(x, y, z, spread, lit);
+      }
 
       // The minority accent: only some tufts throw up upright blades/stems/fronds.
       // DENSITY: rarer accents and fewer blades each, so verticals stay an

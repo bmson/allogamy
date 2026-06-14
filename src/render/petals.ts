@@ -431,13 +431,17 @@ export function createDrift(opts: DriftOptions = {}): Drift {
     kinds[w] = kind;
 
     if (kind === KIND_PETAL) {
-      // warm flora petals — white / blossom-pink / soft violet / pale yellow
+      // warm flora petals — white / blossom-pink / soft violet / pale yellow, plus
+      // an occasional warm coral and a cool sky-blue so the drift carries a fuller
+      // wildflower spectrum rather than three repeated tints.
       const r = rnd();
-      if (r < 0.4) c.copy(palette.flowerWhite);
-      else if (r < 0.66) c.copy(palette.blossom);
-      else if (r < 0.85) c.copy(palette.flowerLavender);
-      else c.copy(palette.flowerYellow);
-      c.offsetHSL((rnd() - 0.5) * 0.02, (rnd() - 0.5) * 0.06, (rnd() - 0.5) * 0.06);
+      if (r < 0.34) c.copy(palette.flowerWhite);
+      else if (r < 0.56) c.copy(palette.blossom);
+      else if (r < 0.74) c.copy(palette.flowerLavender);
+      else if (r < 0.86) c.copy(palette.flowerYellow);
+      else if (r < 0.94) c.copy(palette.orangeEye).lerp(palette.blossom, 0.45); // soft coral
+      else c.copy(palette.flowerLavender).lerp(palette.skyHorizon, 0.5); // pale cornflower blue
+      c.offsetHSL((rnd() - 0.5) * 0.025, (rnd() - 0.5) * 0.07, (rnd() - 0.5) * 0.07);
       scales[w] = 0.5 + rnd() * 0.45;
       aspects[w] = 1.2 + rnd() * 0.35; // mild petal elongation (soft teardrop)
     } else if (kind === KIND_LEAF) {

@@ -31,6 +31,15 @@ import { palette } from '../render/palette';
 // with real parallax. A slow wind also drifts the whole field so the clouds sail
 // even when you hover.
 //
+// DISTRIBUTION (the cover refinement): a uniform scatter reads as a flat hazy veil.
+// Real skies clump into a few cumulus banks with open blue between, so we instead
+// pull most puffs into a handful of CLUSTERS (bell falloff around group centres →
+// dense core, soft fringe), leave a few lone STRAYS drifting in the gaps, and lift
+// a fraction into a higher/smaller/fainter WISP layer for depth + parallax. Cover
+// thus comes from CLUSTERING, not from cranking opacity — the blue still dominates.
+// Recycling wraps the GROUP CENTRES (not individual puffs) so a formation rides as
+// a rigid clump and never tears into a veil as it wraps around the bird.
+//
 // This is FAR cheaper than the previous raymarch (no per-pixel marching at all —
 // just alpha-blended instanced quads), which suits this fill-rate-bound engine.
 // House style: instanced MeshBasicNodeMaterial, TSL Fn/uniforms, billboarded in the
@@ -41,26 +50,53 @@ export interface VolumetricCloudsOpts {
   count?: number;       // number of cloud sprites in the recycled pool
   radius?: number;      // horizontal half-extent of the field around the bird (world u)
   depth?: number;       // how far ahead/behind the field reaches (the fly-through axis)
-  baseY?: number;       // centre height of the cloud band (world Y)
-  spreadY?: number;     // vertical thickness of the band
+  baseY?: number;       // centre height of the LOW cumulus band (world Y)
+  spreadY?: number;     // vertical thickness of the low band
   size?: number;        // base sprite size (world u); scaled per-instance
   fogNear?: number;     // distance where puffs begin dissolving into the sky
   fogFar?: number;      // distance where puffs are fully sky (gone)
   windSpeed?: number;   // world u/s the whole field sails (with the scene wind)
   seed?: number;        // RNG seed for the scatter (reproducible)
+  opacity?: number;     // per-puff alpha multiplier — keep low so blue dominates
+
+  // --- distribution into discrete cumulus FORMATIONS -------------------------
+  groups?: number;      // number of cumulus clusters scattered across the field
+  clusterSpread?: number; // horizontal radius a group's puffs huddle within (world u)
+  clusterSpreadY?: number; // vertical jitter of puffs within a group (world u)
+  strays?: number;      // 0..1 fraction of puffs scattered loosely BETWEEN groups
+                        // (a few lone wisps so gaps aren't perfectly empty)
+
+  // --- a second, higher WISP layer for depth/parallax ------------------------
+  highFrac?: number;    // 0..1 fraction of puffs lifted into the high wisp layer
+  highY?: number;       // centre height of the high band (world Y)
+  highSpreadY?: number; // vertical thickness of the high band
+  highSize?: number;    // base sprite size for the high wisps (smaller, thinner)
+  highOpacity?: number; // alpha multiplier for the high layer (fainter than the low)
 }
 
 const DEFAULTS: Required<VolumetricCloudsOpts> = {
-  count: 320,
-  radius: 1700,
-  depth: 3000,
-  baseY: 300,        // band centre a little above the bird's start (y~158) so the
-  spreadY: 230,      // bank sits low across the horizon and the bird flies INTO it
-  size: 440,         // big soft puffs — the reference look is a few large billows
-  fogNear: 700,      // hold puffs solid out to here, then dissolve into the haze
-  fogFar: 2900,
-  windSpeed: 7.0,
+  count: 360,
+  radius: 1900,
+  depth: 3200,
+  baseY: 360,        // low band centre well above the bird's start (y~158) so the
+  spreadY: 150,      // banks sit as billows over the horizon, not a smear on it
+  size: 470,         // big soft puffs — the reference look is a few large billows
+  fogNear: 950,      // hold puffs solid out to here, then dissolve into the haze
+  fogFar: 3100,
+  windSpeed: 6.5,
   seed: 1337,
+  opacity: 0.36,     // thin: coverage comes from CLUSTERING, not from a flat veil
+
+  groups: 8,         // a handful of distinct cumulus banks with open blue between
+  clusterSpread: 330, // puffs huddle this tight → reads as one billowing formation
+  clusterSpreadY: 110,
+  strays: 0.14,      // a few lone wisps drifting in the gaps
+
+  highFrac: 0.26,    // a quarter of the field lifted high for depth + parallax
+  highY: 620,
+  highSpreadY: 150,
+  highSize: 360,     // smaller, thinner wisps up high
+  highOpacity: 0.22, // fainter so the high layer reads as distant haze-cloud
 };
 
 export interface VolumetricClouds {
@@ -71,6 +107,12 @@ export interface VolumetricClouds {
     fogNear: ReturnType<typeof uniform>;
     fogFar: ReturnType<typeof uniform>;
   };
+}
+
+// gaussian-ish [-1,1] from two uniforms — tighter packing toward a cluster centre
+// than a flat random, so a group reads as a dense core with a soft falloff edge.
+function bell(rng: () => number): number {
+  return (rng() + rng() - 1);
 }
 
 // Tiny deterministic LCG so the scatter is reproducible across runs/machines.
@@ -92,35 +134,72 @@ export function makeVolumetricClouds(opts: VolumetricCloudsOpts = {}): Volumetri
   const o = { ...DEFAULTS, ...opts };
   const rng = makeRng(o.seed);
 
-  const uOpacity = uniform(0.3); // thin, wispy drifts — not a solid bank
+  const uOpacity = uniform(o.opacity); // thin, wispy drifts — not a solid bank
   const uFogNear = uniform(o.fogNear);
   const uFogFar = uniform(o.fogFar);
 
-  // --- per-instance scatter ---------------------------------------------------
-  // The reference scatters x in ±500, y biased LOW (-rand*rand*200-15), z 0..8000,
-  // random roll, scale rand*rand*1.5+0.5 (mostly small puffs, a few big ones). We
-  // keep that distribution shape, scaled to this world. aOffset holds an ABSOLUTE
-  // WORLD position (the mesh stays at the origin), so `positionWorld` and the
-  // camera→puff distance in the fragment node are true world quantities. update()
-  // wraps the horizontal components into a box re-centred on the bird each frame.
+  // --- per-instance scatter: discrete cumulus FORMATIONS ----------------------
+  // The reference scatters puffs uniformly, which reads as a flat veil. Real skies
+  // clump into a few cumulus banks with open blue between, so we instead:
+  //   1. pick `groups` cluster CENTRES spread across the field (low band);
+  //   2. huddle most puffs tightly around a centre (bell falloff → dense core,
+  //      soft edge) so each group reads as one billowing formation;
+  //   3. leave `strays` of them loose between groups (lone drifting wisps);
+  //   4. lift `highFrac` of them into a higher, smaller, fainter WISP layer for
+  //      depth + parallax.
+  // Coverage thus comes from CLUSTERING, not from cranking opacity — the blue sky
+  // still dominates in the gaps. Each puff carries a LOCAL offset from its group
+  // centre (cgx/cgz) so recycling can wrap whole formations coherently (see update):
+  // world pos = wrap(groupCentre) + localOffset.
   const N = o.count;
-  const offsets = new Float32Array(N * 3); // ABSOLUTE world x,y,z of each puff
-  const params = new Float32Array(N * 2);  // scale, roll
+  const offsets = new Float32Array(N * 3);  // ABSOLUTE world x,y,z (rebuilt each frame)
+  const local = new Float32Array(N * 3);    // per-puff offset from its group centre
+  const params = new Float32Array(N * 3);   // scale, roll, opacityMul
+  const groupOf = new Int32Array(N);        // which group each puff belongs to (-1 = stray)
+
+  // group centres, in ABSOLUTE world space (wrapped around the bird each frame).
+  const G = Math.max(1, o.groups);
+  const gx = new Float32Array(G);
+  const gz = new Float32Array(G);
+  for (let g = 0; g < G; g++) {
+    gx[g] = (rng() * 2 - 1) * o.radius;
+    gz[g] = (rng() * 2 - 1) * o.depth;
+  }
 
   for (let i = 0; i < N; i++) {
-    const x = (rng() * 2 - 1) * o.radius;
-    const z = (rng() * 2 - 1) * o.depth;
-    // y spread around the band centre with a gentle downward bias (rand*rand skews
-    // low), echoing the reference's -r*r*200 lean while still straddling baseY so the
-    // bird flies THROUGH the band rather than always under it.
-    const y = o.baseY + (0.5 - rng() * rng()) * o.spreadY * 2.0;
-    const scale = (rng() * rng() * 1.6 + 0.5); // mostly small, a few big billows
+    const high = rng() < o.highFrac;
+    const stray = rng() < o.strays;
+    const bandY = high ? o.highY : o.baseY;
+    const bandSpread = high ? o.highSpreadY : o.spreadY;
+
+    // `local` holds, for grouped puffs, the OFFSET from the group centre; for
+    // strays it holds an ABSOLUTE field position (group -1). Y is always absolute.
+    let ox: number, oz: number, ay: number, g = -1;
+    if (stray) {
+      // a lone wisp: scattered loosely anywhere in the field (no group)
+      ox = (rng() * 2 - 1) * o.radius;
+      oz = (rng() * 2 - 1) * o.depth;
+      ay = bandY + bell(rng) * bandSpread;
+    } else {
+      // huddle around a group centre; bell falloff → dense core, soft fringe.
+      g = (rng() * G) | 0;
+      const sp = high ? o.clusterSpread * 1.4 : o.clusterSpread; // high wisps spread wider/thinner
+      ox = bell(rng) * sp;
+      oz = bell(rng) * sp;
+      ay = bandY + bell(rng) * (high ? o.highSpreadY : o.clusterSpreadY);
+    }
+
+    // size: mostly mid, a few big billows (rng*rng skews small). High wisps run smaller.
+    const baseSize = high ? o.highSize : o.size;
+    const scale = (rng() * rng() * 1.4 + 0.55) * (baseSize / o.size);
     const roll = rng() * Math.PI * 2;
-    offsets[i * 3] = x;
-    offsets[i * 3 + 1] = y;
-    offsets[i * 3 + 2] = z;
-    params[i * 2] = scale;
-    params[i * 2 + 1] = roll;
+    const opMul = high ? o.highOpacity / o.opacity : 1.0;
+
+    local[i * 3] = ox; local[i * 3 + 1] = ay; local[i * 3 + 2] = oz;
+    groupOf[i] = g;
+    params[i * 3] = scale;
+    params[i * 3 + 1] = roll;
+    params[i * 3 + 2] = opMul;
   }
 
   // A single quad; instanced N times. We billboard it in the vertex node.
@@ -133,7 +212,7 @@ export function makeVolumetricClouds(opts: VolumetricCloudsOpts = {}): Volumetri
   const offAttr = new THREE.InstancedBufferAttribute(offsets, 3);
   offAttr.setUsage(THREE.DynamicDrawUsage); // updated each frame as the field wraps
   geo.setAttribute('aOffset', offAttr);
-  geo.setAttribute('aParam', new THREE.InstancedBufferAttribute(params, 2));
+  geo.setAttribute('aParam', new THREE.InstancedBufferAttribute(params, 3));
 
   // --- material ---------------------------------------------------------------
   // The ACTUAL CodePen/three.js sprite asset — mrdoob's `cloud10.png` fuzzy cumulus
@@ -167,7 +246,7 @@ export function makeVolumetricClouds(opts: VolumetricCloudsOpts = {}): Volumetri
   // per-plane matrix bake, but always facing the camera so it reads from any flight
   // heading (the reference's planes only ever faced +z toward its forward-flying cam).
   const off = attribute('aOffset', 'vec3');
-  const prm = attribute('aParam', 'vec2');
+  const prm = attribute('aParam', 'vec3');
   const scl = prm.x.mul(float(o.size));
   const roll = prm.y;
   const cr = roll.cos();
@@ -214,7 +293,9 @@ export function makeVolumetricClouds(opts: VolumetricCloudsOpts = {}): Volumetri
     col.assign(mix(col, skyTone, fog));
     alpha.mulAssign(float(1.0).sub(fog));
 
-    return vec4(col, alpha.mul(uOpacity));
+    // per-instance opacity multiplier (high wisp layer is fainter than the low bank)
+    const opMul = attribute('aParam', 'vec3').z;
+    return vec4(col, alpha.mul(uOpacity).mul(opMul));
   });
   mat.colorNode = cloud();
 
@@ -223,16 +304,16 @@ export function makeVolumetricClouds(opts: VolumetricCloudsOpts = {}): Volumetri
   mesh.frustumCulled = false; // the field wraps the camera; never cull it
 
   // --- recycling --------------------------------------------------------------
-  // Puffs live at ABSOLUTE world positions. Each frame we (a) drift them on the
-  // wind, then (b) wrap their HORIZONTAL position into a box of half-extent
-  // (radius, depth) re-centred on the bird — any puff that has fallen more than
-  // `radius`/`depth` behind is teleported the same span ahead, so the bird always
-  // has a full field around it no matter how far or which way it flies. Y is kept
-  // absolute (the band stays at world `baseY`), wrapped within ±spreadY of it. The
-  // bird thus perpetually flies into fresh puffs with true parallax — the same
-  // endless fly-through the reference gets by looping a static field, but heading-
-  // agnostic. The mesh stays at the origin; aOffset carries the world position.
+  // Coherent-formation recycling. The whole field drifts on the wind, then we wrap
+  // it around the bird so the flight is endless from any heading. To keep cumulus
+  // banks INTACT (rather than tearing a group apart when one edge puff wraps), we
+  // wrap the GROUP CENTRES, not the individual puffs: each group's puffs ride along
+  // as a rigid clump (world pos = wrapped centre + the puff's fixed local offset).
+  // Strays (group -1) carry an absolute position and wrap individually — they're
+  // lone wisps so there's nothing to tear. Y is anchored to the world bands.
   const wind = new THREE.Vector3(-1, 0, -0.35).normalize();
+  const wgx = new Float32Array(G); // wrapped group centre x this frame
+  const wgz = new Float32Array(G);
 
   // wrap v into [centre-half, centre+half) by adding/subtracting whole spans.
   function wrapAround(v: number, centre: number, half: number): number {
@@ -244,15 +325,31 @@ export function makeVolumetricClouds(opts: VolumetricCloudsOpts = {}): Volumetri
     mesh,
     update(dt, _t, camPos) {
       const wx = wind.x * o.windSpeed * dt;
-      const wy = wind.y * o.windSpeed * dt;
       const wz = wind.z * o.windSpeed * dt;
+      // drift + wrap each group centre around the bird (keeps a wide spread of banks)
+      for (let g = 0; g < G; g++) {
+        gx[g] = wrapAround(gx[g] + wx, camPos.x, o.radius);
+        gz[g] = wrapAround(gz[g] + wz, camPos.z, o.depth);
+        wgx[g] = gx[g];
+        wgz[g] = gz[g];
+      }
       for (let i = 0; i < N; i++) {
         const ix = i * 3;
-        const x = wrapAround(offsets[ix] + wx, camPos.x, o.radius);
-        const z = wrapAround(offsets[ix + 2] + wz, camPos.z, o.depth);
-        // Y stays anchored to the world band at baseY (independent of camera height).
-        const y = wrapAround(offsets[ix + 1] + wy, o.baseY, o.spreadY);
-        offsets[ix] = x; offsets[ix + 1] = y; offsets[ix + 2] = z;
+        const g = groupOf[i];
+        let x: number, z: number;
+        if (g < 0) {
+          // stray wisp: local[] is absolute; drift + wrap it on its own.
+          x = wrapAround(local[ix] + wx, camPos.x, o.radius);
+          z = wrapAround(local[ix + 2] + wz, camPos.z, o.depth);
+          local[ix] = x; local[ix + 2] = z;
+        } else {
+          // grouped puff: rides its (already-wrapped) centre + fixed local offset.
+          x = wgx[g] + local[ix];
+          z = wgz[g] + local[ix + 2];
+        }
+        offsets[ix] = x;
+        offsets[ix + 1] = local[ix + 1]; // Y stays anchored to its world band
+        offsets[ix + 2] = z;
       }
       offAttr.needsUpdate = true;
     },

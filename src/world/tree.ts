@@ -387,17 +387,22 @@ function growBranch(
   }
 }
 
-// Deciduous archetypes — four distinct silhouettes so a wood is a mix of forms,
+// Deciduous archetypes — five distinct silhouettes so a wood is a mix of forms,
 // not one shape rescaled: a broad spreading oak, a tall slim birch-ish tree, a
-// low gnarled old-timer, and a weeping/drooping crown.
-type Decid = 'spread' | 'tall' | 'gnarled' | 'weeping';
+// low gnarled old-timer, a weeping/drooping crown, and a narrow upright columnar
+// (poplar/cypress-ish spire) that breaks up the rounded tree line on the ridges.
+type Decid = 'spread' | 'tall' | 'gnarled' | 'weeping' | 'column';
 
 function buildDeciduous(rnd: () => number): TreeProto {
   const tp: number[] = [], tn: number[] = [], tc: number[] = [];
   const fp: number[] = [], fs: number[] = [], fc: number[] = [], fw: number[] = [], fa: number[] = [], fasp: number[] = [];
 
   const kindRoll = rnd();
-  const kind: Decid = kindRoll < 0.4 ? 'spread' : kindRoll < 0.68 ? 'tall' : kindRoll < 0.86 ? 'gnarled' : 'weeping';
+  const kind: Decid =
+    kindRoll < 0.34 ? 'spread' :
+    kindRoll < 0.58 ? 'tall' :
+    kindRoll < 0.76 ? 'gnarled' :
+    kindRoll < 0.9 ? 'weeping' : 'column';
 
   // per-tree personality. Warmth swings WIDE so the wood spans deep cool emerald,
   // blue-green, bright lime, and the odd golden-turning tree. Biased toward the
@@ -408,18 +413,19 @@ function buildDeciduous(rnd: () => number): TreeProto {
   const ch: TreeChar = {
     warmth: clamp(wRoll * wRoll * wRoll * 0.6 + wRoll * 0.5 - 0.18, -1, 1),
     tone: rnd(),
-    gnarl: kind === 'gnarled' ? 0.7 + rnd() * 0.3 : kind === 'weeping' ? 0.45 + rnd() * 0.3 : 0.2 + rnd() * 0.35,
+    gnarl: kind === 'gnarled' ? 0.7 + rnd() * 0.3 : kind === 'weeping' ? 0.45 + rnd() * 0.3 : kind === 'column' ? 0.12 + rnd() * 0.16 : 0.2 + rnd() * 0.35,
     droop: kind === 'weeping' ? 0.4 + rnd() * 0.25 : kind === 'gnarled' ? 0.12 + rnd() * 0.12 : rnd() * 0.08,
     // depth 3..4 — branch tips fan out exponentially, so this is the main lever
     // on per-tree cost; the wild look comes from the lobed canopy + warmth, not
     // from a deeper, heavier branch tree.
-    maxDepth: kind === 'tall' ? 3 : kind === 'gnarled' ? 4 : 3 + (rnd() < 0.45 ? 1 : 0),
+    maxDepth: kind === 'tall' ? 3 : kind === 'gnarled' ? 4 : kind === 'column' ? 3 : 3 + (rnd() < 0.45 ? 1 : 0),
   };
 
   let trunkH: number, trunkR: number, leanAmt: number;
   if (kind === 'tall') { trunkH = 12 + rnd() * 7; trunkR = 0.34 + rnd() * 0.22; leanAmt = rnd() * 0.1; }
   else if (kind === 'gnarled') { trunkH = 6 + rnd() * 3.5; trunkR = 0.55 + rnd() * 0.4; leanAmt = 0.14 + rnd() * 0.22; }
   else if (kind === 'spread') { trunkH = 7 + rnd() * 4; trunkR = 0.46 + rnd() * 0.34; leanAmt = rnd() * 0.16; }
+  else if (kind === 'column') { trunkH = 13 + rnd() * 6; trunkR = 0.3 + rnd() * 0.16; leanAmt = rnd() * 0.06; }
   else { trunkH = 8 + rnd() * 4; trunkR = 0.4 + rnd() * 0.26; leanAmt = rnd() * 0.14; }
 
   // a curved trunk in 3 segments — bends as it rises so even the bole wanders
@@ -443,14 +449,17 @@ function buildDeciduous(rnd: () => number): TreeProto {
   const boughs =
     kind === 'spread' ? 4 + Math.floor(rnd() * 3) :
     kind === 'gnarled' ? 3 + Math.floor(rnd() * 3) :
-    kind === 'tall' ? 2 + Math.floor(rnd() * 2) : 3 + Math.floor(rnd() * 3);
-  const splay = kind === 'spread' ? 0.85 : kind === 'gnarled' ? 1.0 : 0.5;
+    kind === 'tall' ? 2 + Math.floor(rnd() * 2) :
+    kind === 'column' ? 3 + Math.floor(rnd() * 2) : 3 + Math.floor(rnd() * 3);
+  // Columnar trees keep their boughs short & steep, hugging the trunk so the
+  // crown stays a narrow upright spire rather than fanning out.
+  const splay = kind === 'spread' ? 0.85 : kind === 'gnarled' ? 1.0 : kind === 'column' ? 0.22 : 0.5;
   const nd = new THREE.Vector3();
   for (let i = 0; i < boughs; i++) {
-    perturb(nd, heading, splay * (0.5 + rnd() * 0.6), kind === 'tall' ? 0.22 : 0.1, rnd);
+    perturb(nd, heading, splay * (0.5 + rnd() * 0.6), kind === 'tall' ? 0.22 : kind === 'column' ? 0.5 : 0.1, rnd);
     growBranch(
       tp, tn, tc, fp, fs, fc, fw, fa, fasp, top, nd.clone(),
-      trunkH * (0.34 + rnd() * 0.24), trunkR * (0.5 + rnd() * 0.16), 1, ch, rnd,
+      trunkH * (kind === 'column' ? 0.18 + rnd() * 0.12 : 0.34 + rnd() * 0.24), trunkR * (0.5 + rnd() * 0.16), 1, ch, rnd,
     );
   }
 
@@ -458,9 +467,33 @@ function buildDeciduous(rnd: () => number): TreeProto {
   // dim deeply-shaded core and brighter lobes around it, the whole thing pushed
   // off-centre so no two trees crown the same. Tall trees keep a tighter column,
   // spread trees a wide flattened parasol.
-  const canopyR = trunkH * (kind === 'tall' ? 0.34 + rnd() * 0.12 : kind === 'spread' ? 0.6 + rnd() * 0.22 : 0.48 + rnd() * 0.18);
+  const canopyR = trunkH * (
+    kind === 'tall' ? 0.34 + rnd() * 0.12 :
+    kind === 'spread' ? 0.6 + rnd() * 0.22 :
+    kind === 'column' ? 0.2 + rnd() * 0.07 : 0.48 + rnd() * 0.18);
   const cTop = top.clone();
   const cBase = canopyR * (kind === 'spread' ? 0.32 : kind === 'weeping' ? 0.5 : 0.42);
+
+  if (kind === 'column') {
+    // A narrow upright spire: a vertical STACK of small overlapping blobs climbing
+    // the upper trunk, so the silhouette is a tall flame/cypress column rather than
+    // a ball. Cheap (each blob is small) and a strong shape contrast on the skyline.
+    const stack = 3 + Math.floor(rnd() * 2);
+    const spireBot = cTop.y - canopyR * 1.4; // canopy starts well down the trunk
+    const spireH = canopyR * (4.0 + rnd() * 1.4);
+    for (let i = 0; i < stack; i++) {
+      const f = i / (stack - 1); // 0 base .. 1 tip
+      const ly = spireBot + spireH * f;
+      const lr = canopyR * (0.95 - 0.5 * f) * (0.85 + rnd() * 0.3); // tapers to a point
+      const wob = canopyR * 0.18;
+      emitBlob(
+        fp, fs, fc, fw, fa, fasp,
+        cTop.x + (rnd() - 0.5) * wob, ly, cTop.z + (rnd() - 0.5) * wob, lr,
+        34 + Math.floor(rnd() * 24), 2.3, 0.95, 'deciduous', rnd,
+        { warmth: ch.warmth, droop: ch.droop * 0.3, squash: 1.15, litBias: -0.02 + f * 0.1, scaleVar: 0.6 },
+      );
+    }
+  } else {
   // DENSITY: fewer lobes (was 3..5) → simpler, lighter crowns that still read as
   // a lumpy mass rather than a ball.
   const lobes = 2 + Math.floor(rnd() * 2);
@@ -485,6 +518,7 @@ function buildDeciduous(rnd: () => number): TreeProto {
       38 + Math.floor(rnd() * 38), 2.5, 0.95, 'deciduous', rnd,
       { warmth: ch.warmth, droop: ch.droop, squash: kind === 'spread' ? 0.72 : 0.86, litBias: 0.04, scaleVar: 0.75 },
     );
+  }
   }
 
   const fullH = trunkH + canopyR * 1.6;
@@ -621,7 +655,19 @@ function buildBush(rnd: () => number, scrub: boolean): TreeProto {
   }
   // blossoms + berries scattered over the crown (scrub gets far fewer). DENSITY:
   // fewer bright accents so bushes read as calm masses, not confetti-dotted.
-  const decor = scrub ? 2 + Math.floor(rnd() * 4) : 7 + Math.floor(rnd() * 9);
+  // A FLOWERING shrub (a fraction of the non-scrub bushes) blooms densely in one
+  // dominant colour family — a gorse-yellow / white-blackthorn / pink-heather
+  // shrub in full flower — so a hedge isn't all the same speckled green-with-berry.
+  const flowering = !scrub && rnd() < 0.42;
+  // The dominant bloom for a flowering shrub: pick one warm family and lean on it.
+  const bloomRoll = rnd();
+  const bloomBase = bloomRoll < 0.34 ? palette.flowerYellow
+    : bloomRoll < 0.6 ? palette.blossom
+    : bloomRoll < 0.82 ? palette.flowerViolet
+    : palette.flowerWhite;
+  const decor = scrub ? 2 + Math.floor(rnd() * 4)
+    : flowering ? 16 + Math.floor(rnd() * 14)
+    : 7 + Math.floor(rnd() * 9);
   for (let i = 0; i < decor; i++) {
     const u = rnd() * 2 - 1;
     const phi = rnd() * Math.PI * 2;
@@ -630,15 +676,25 @@ function buildBush(rnd: () => number, scrub: boolean): TreeProto {
     const px = Math.cos(phi) * s * rr;
     const py = cy + Math.abs(u) * rr * 0.7; // bias to the upper surface
     const pz = Math.sin(phi) * s * rr;
-    const r = rnd();
-    if (r < 0.30) _col.copy(palette.blossom);
-    else if (r < 0.52) _col.copy(palette.flowerViolet); // ~22% violet punctuation
-    else if (r < 0.66) _col.copy(palette.flowerYellow);
-    else if (r < 0.85) _col.copy(palette.berryRed);
-    else _col.copy(palette.berryDeep);
-    _col.offsetHSL((rnd() - 0.5) * 0.03, (rnd() - 0.5) * 0.06, (rnd() - 0.5) * 0.06);
+    if (flowering) {
+      // a blooming shrub: ~78% the dominant bloom (coherent flowering mass), the
+      // rest companions — a few berries / a second flower tone for richness.
+      const r = rnd();
+      if (r < 0.78) _col.copy(bloomBase);
+      else if (r < 0.88) _col.copy(palette.flowerWhite);
+      else if (r < 0.95) _col.copy(palette.berryRed);
+      else _col.copy(palette.berryDeep);
+    } else {
+      const r = rnd();
+      if (r < 0.30) _col.copy(palette.blossom);
+      else if (r < 0.52) _col.copy(palette.flowerViolet); // ~22% violet punctuation
+      else if (r < 0.66) _col.copy(palette.flowerYellow);
+      else if (r < 0.85) _col.copy(palette.berryRed);
+      else _col.copy(palette.berryDeep);
+    }
+    _col.offsetHSL((rnd() - 0.5) * 0.04, (rnd() - 0.5) * 0.07, (rnd() - 0.5) * 0.07);
     fp.push(px, py, pz);
-    fs.push(0.7 + rnd() * 0.7); // small bright accents
+    fs.push((flowering ? 0.6 : 0.7) + rnd() * 0.7); // small bright accents
     fc.push(_col.r, _col.g, _col.b);
     fw.push(0.3 + rnd() * 0.2);
     fa.push(rnd() * Math.PI); // blossoms/berries are round dabs
@@ -651,7 +707,7 @@ function buildBush(rnd: () => number, scrub: boolean): TreeProto {
  * wood reads as many individuals — far less obvious repetition than before. */
 export function createTreePrototypes(seed: number): TreeProto[] {
   const protos: TreeProto[] = [];
-  for (let i = 0; i < 11; i++) protos.push(buildDeciduous(mulberry32((seed * 131 + i * 17 + 1) >>> 0)));
+  for (let i = 0; i < 13; i++) protos.push(buildDeciduous(mulberry32((seed * 131 + i * 17 + 1) >>> 0)));
   for (let i = 0; i < 7; i++) protos.push(buildConifer(mulberry32((seed * 197 + i * 23 + 7) >>> 0)));
   return protos;
 }
@@ -721,6 +777,30 @@ export function scatterTrees(
   };
 
   // ---- trees: trunk geometry + foliage + contact shadow ----
+  // Copse seeding: a few random attractor points per chunk. Cells near a copse
+  // centre get a placement boost (trees gather into tight little groves), cells far
+  // from any centre are slightly suppressed (more lone specimens & open clearings).
+  // This sculpts the SAME tree budget into clumps + soloists rather than an even
+  // sprinkle, on top of the broad forest() woodland gate. Cheap: a handful of
+  // squared-distance tests per cell.
+  const nCopse = 1 + Math.floor(rnd() * 3); // 1..3 little groves per chunk
+  const copseX = new Float32Array(nCopse), copseZ = new Float32Array(nCopse), copseR2 = new Float32Array(nCopse);
+  for (let i = 0; i < nCopse; i++) {
+    copseX[i] = ox + rnd() * S;
+    copseZ[i] = oz + rnd() * S;
+    const cr = S * (0.1 + rnd() * 0.16); // grove radius
+    copseR2[i] = cr * cr;
+  }
+  const copseBoost = (x: number, z: number) => {
+    let best = 0;
+    for (let i = 0; i < nCopse; i++) {
+      const dx = x - copseX[i], dz = z - copseZ[i];
+      const f = 1 - (dx * dx + dz * dz) / copseR2[i];
+      if (f > best) best = f; // nearest copse falloff, 0 outside .. 1 at centre
+    }
+    return best; // 0 in the open .. 1 in the heart of a grove
+  };
+
   // DENSITY: coarser scatter grid (was 13) and a lower placement chance so groves
   // read as distinct masses with breathing room rather than a solid wall of trees.
   const cells = 11;
@@ -732,8 +812,12 @@ export function scatterTrees(
       const surf = field.surface(x, z);
       if (surf.path > 0.2 || surf.rock > 0.4 || surf.slope > 0.46) continue;
       const dens = field.forest(x, z);
-      // clumped into woodland (dense), clearings stay open
-      if (rnd() > 0.32 * (0.35 + dens)) continue;
+      // clumped into woodland (dense) AND into copses, clearings stay open. The
+      // copse boost lifts the chance inside a grove and gently lowers it outside,
+      // redistributing (not inflating) the budget into clumps + lone trees.
+      const clump = copseBoost(x, z);
+      const chance = 0.32 * (0.35 + dens) * (0.7 + clump * 1.3);
+      if (rnd() > chance) continue;
 
       const proto = treeProtos[Math.floor(rnd() * treeProtos.length)];
       // Long-tailed size: most trees mid-sized, many smaller, but the odd

@@ -96,9 +96,11 @@ export function scatterLeaves(field: TerrainField, cx: number, cz: number): Spla
         let h: number, s: number, l: number;
         if (turn < 0.45) {
           // green-turning: a yellow-green leaf just past its prime, echoing foliage.
-          h = 0.26 - rnd() * 0.05 - turn * 0.04;
-          s = 0.5 + rnd() * 0.12;
-          l = 0.34 + rnd() * 0.12;
+          // A few are still fresh bright green (just-fallen), widening the spread.
+          const freshLeaf = rnd() < 0.25;
+          h = (freshLeaf ? 0.31 : 0.26) - rnd() * 0.05 - turn * 0.04;
+          s = 0.5 + rnd() * 0.14;
+          l = (freshLeaf ? 0.38 : 0.34) + rnd() * 0.12;
         } else if (turn < 0.78) {
           // warm amber / ochre — the bulk of the autumn litter.
           h = 0.11 + rnd() * 0.035;

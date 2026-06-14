@@ -51,6 +51,11 @@ const STONE_COOL = new THREE.Color('#5d6275'); // cool blue-violet shadow stone
 const STONE_IRON = new THREE.Color('#9a6b4a'); // rust / iron-stain streaks
 const MOSS_A = new THREE.Color('#6f8a3e'); // sunlit lichen green
 const MOSS_B = new THREE.Color('#3d5a2c'); // shaded moss
+// A couple of extra rock characters so a field isn't all one grey granite: a warm
+// honey sandstone and a pale near-white quartz/limestone. Per-boulder tint only.
+const STONE_SAND = new THREE.Color('#b89466'); // warm honey sandstone
+const STONE_PALE = new THREE.Color('#d8d4c4'); // pale quartz / weathered limestone
+const LICHEN_RUST = new THREE.Color('#b08a4a'); // ochre crustose lichen on crowns
 
 // fract helper for cheap value-noise.
 function hash3(x: number, y: number, z: number): number {
@@ -194,13 +199,22 @@ function makeBoulder(
   // Per-boulder base value/temperature so a cluster isn't monochrome.
   _base.copy(palette.rock).lerp(palette.rockShadow, rnd() * 0.6);
   _base.lerp(STONE_WARM, rnd() * 0.25);
+  // Per-boulder ROCK CHARACTER: most stones stay neutral grey granite, but a
+  // minority lean toward a warm honey sandstone or a pale quartz/limestone, so a
+  // boulder field reads as varied stone rather than one grey lump rescaled.
+  const charRoll = rnd();
+  if (charRoll < 0.22) _base.lerp(STONE_SAND, 0.3 + rnd() * 0.4);
+  else if (charRoll < 0.34) _base.lerp(STONE_PALE, 0.3 + rnd() * 0.45);
   _base.offsetHSL((rnd() - 0.5) * 0.03, (rnd() - 0.5) * 0.06, (rnd() - 0.5) * 0.1);
   // Iron staining on some stones.
   const iron = rnd() < 0.4 ? rnd() * 0.18 : 0;
   if (iron > 0) _base.lerp(STONE_IRON, iron);
   // Moss tendency: damp/shaded boulders get a green crown; dry ones almost none.
   const mossy = Math.max(0, rnd() * 1.4 - 0.35); // 0..~1, many near 0
-  _moss.copy(MOSS_A).lerp(MOSS_B, rnd() * 0.6);
+  // Some stones wear an OCHRE crustose lichen instead of green moss — patchy
+  // rust-gold crowns, a different weathering read on a fraction of the rocks.
+  const ochreLichen = rnd() < 0.3;
+  _moss.copy(ochreLichen ? LICHEN_RUST : MOSS_A).lerp(ochreLichen ? STONE_IRON : MOSS_B, rnd() * 0.6);
 
   const topY = radius * sy;
   const col = new Float32Array(count * 3);
