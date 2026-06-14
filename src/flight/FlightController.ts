@@ -43,15 +43,17 @@ export class FlightController {
     const c = this.source.read();
     const MAX_ROLL = 0.62;
     const MAX_PITCH = 0.42;
-    const targetRoll = c.roll * MAX_ROLL;
+    const targetRoll = -c.roll * MAX_ROLL; // bank INTO the turn (the tilt was inverted)
     const targetPitch = c.pitch * MAX_PITCH;
 
     // Ease toward targets — this is where the "weight" lives.
     this.roll += (targetRoll - this.roll) * Math.min(1, dt * 2.1);
     this.pitch += (targetPitch - this.pitch) * Math.min(1, dt * 1.7);
 
-    // Banking turn: the more the bird is rolled, the faster it yaws.
-    this.yaw += this.roll * 0.95 * dt;
+    // Banking turn: the more the bird is rolled, the faster it yaws. Sign flipped in
+    // lockstep with the bank above so the TURN DIRECTION is unchanged — only the tilt
+    // now leans correctly into the turn.
+    this.yaw -= this.roll * 0.95 * dt;
 
     // Heading from yaw + pitch.
     const cp = Math.cos(this.pitch);
