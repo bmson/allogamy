@@ -133,22 +133,24 @@ export function makeSplatMaterial(): THREE.MeshBasicNodeMaterial {
   // with only gentle aerial perspective at the very back — not a white-out.
   const graded = vertexStage(mix(greyed, fogCol, air.mul(0.78)));
 
-  // ---- LOADED-BRUSH TOOTH (per-fragment, cheap) ----------------------------
-  // A smooth gaussian dab reads like airbrush; real loaded-brush paint shows
-  // fine bristle streaks running ALONG the stroke plus a touch of grain. We add
-  // a couple of instructions: ridged streaks across the stroke WIDTH (r.x) that
-  // run down its length, phase-offset per stamp by `seed`, lightly broken up by
-  // the per-band `bristle` hash already computed above. The result is a faint
-  // ±value modulation of the pigment — pigment thins on the raised bristle lines
-  // and pools between them — so dense strokes look hand-loaded, not smooth.
+  // ---- PENCIL / DRY-MEDIA TOOTH (per-fragment, cheap) ----------------------
+  // A smooth gaussian dab reads like airbrush; pencil marks need visible grain and
+  // small parallel pressure lines. We add ridges across the stroke width, then a
+  // second finer hatch that mostly darkens the pigment like graphite catching the
+  // paper tooth. It stays inside the dab body so dense strokes still blend.
   // This rides the COLOUR, not the alpha, so it never perturbs alphaTest / the
   // size-floor (the feathered-rim → depth contract in opacityNode is untouched).
   // It also fades out toward the rim (via 1-d) so only the painted body is
   // textured, keeping edges clean where dabs overlap and blend.
-  const streak = sin(r.x.mul(9.0).add(seed.mul(6.2831))); // ridges across width, -1..1
+  const streak = sin(r.x.mul(11.0).add(seed.mul(6.2831))); // ridges across width, -1..1
+  const hatch = smoothstep(
+    float(0.48),
+    float(0.96),
+    sin(r.x.mul(23.0).add(r.y.mul(2.4)).add(seed.mul(6.2831))).mul(0.5).add(0.5),
+  );
   const body = float(1.0).sub(d).max(0.0); // 1 at core → 0 at rim
   // bristle is ~[0,1] per length-band; recentre to ±0.5 so it darkens/lightens.
-  const tooth = streak.mul(0.6).add(bristle.sub(0.5)).mul(0.085).mul(body);
+  const tooth = streak.mul(0.55).add(bristle.sub(0.5)).mul(0.072).sub(hatch.mul(0.036)).mul(body);
   mat.colorNode = graded.mul(float(1.0).add(tooth));
 
   return mat;

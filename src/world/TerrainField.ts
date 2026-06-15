@@ -249,28 +249,27 @@ export class TerrainField {
         _bank.copy(palette.pathEarth).lerp(palette.pathEarthDry, 0.18)
           .lerp(palette.waterEdge, 0.18 + path * 0.48)
           .lerp(palette.rockShadow, clamp((path - 0.2) * 1.35, 0, 0.36));
-        out.lerp(_bank, bank * 0.88);
+        out.lerp(_bank, bank * 0.72);
       }
       // Wet-mud rim first: a thin dark band rides the frayed outer edge of the
       // channel (path mid, not full) where wet earth meets grass.
       const rim = (1 - Math.abs(path - 0.44) * 3.4);
-      if (rim > 0) out.lerp(palette.waterEdge, clamp(rim, 0, 1) * 0.75);
-      // The channel body: shallows toward the banks deepening to the centre. A slow
-      // ripple shifts the deep/shallow mix so the surface has gentle movement of
-      // tone without reading as broken ground. A second, slower swell crossing the
-      // first keeps the ripple from tiling into a regular wash.
-      const ripple = (this.tN.fbm(x * 0.02, z * 0.02, 2)
-        + this.tN.noise(z * 0.009 - 13, x * 0.009 + 7) * 0.5) * 0.4 + 0.5;
+      if (rim > 0) out.lerp(palette.waterEdge, clamp(rim, 0, 1) * 0.55);
+      // The channel body: shallows toward the banks deepening to the centre. Keep
+      // this broad and wash-like; fine sparkle belongs to the moving surface mesh,
+      // not the terrain underpaint, or the river starts reading as grit.
+      const ripple = (this.tN.fbm(x * 0.007, z * 0.007, 2)
+        + this.tN.noise(z * 0.0035 - 13, x * 0.0035 + 7) * 0.45) * 0.32 + 0.52;
       // a richer, deeper blue-green body (a touch more contrast bank→centre).
       _water.copy(palette.waterShallow).lerp(palette.waterDeep, smoothstep(path, 0.26, 0.95));
       // SKY REFLECTION: the calm surface mirrors the pale horizon in broad patches
       // where the slow ripple crests — soft luminous blue lifts that read as a still
       // brook catching the sky, not a flat painted band.
-      _water.lerp(palette.skyHorizon, clamp((ripple - 0.56) * 1.4, 0, 1) * 0.42);
-      // FINE SPARKLE: a tight high-frequency glint field lays scattered near-white
-      // sun-points on the crests — the sun glittering off moving water.
-      const spark = this.tN.noise(x * 0.14 + 4.2, z * 0.14 - 9.1);
-      if (spark > 0.72) _water.lerp(palette.sun, (spark - 0.72) * 1.6 * 0.5);
+      _water.lerp(palette.skyHorizon, clamp((ripple - 0.56) * 0.95, 0, 1) * 0.26);
+      // A broad sun wash replaces the old high-frequency sparkle so the brook
+      // reads like painted water instead of dotted glitter.
+      const sunWash = this.tN.noise(x * 0.004 + 4.2, z * 0.004 - 9.1);
+      if (sunWash > 0.38) _water.lerp(palette.sun, (sunWash - 0.38) * 0.08);
       // Only the channel proper paints as water — faint/worn stretches keep their
       // green so the brook reads as a thin winding ribbon the meadow presses up to.
       out.lerp(_water, smoothstep(path, 0.4, 0.9));

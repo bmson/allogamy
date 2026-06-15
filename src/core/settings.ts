@@ -18,18 +18,18 @@ import { FOG_NEAR, FOG_FAR, WIND_STRENGTH } from '../config';
 // --- Shader uniforms (live, drive the TSL graph) ---------------------------
 // Post-processing painterly grade (post.ts paint() node).
 // Defaults below are the values dialed in live via the tuning panel and exported.
-export const uGlow = uniform(0.61); // halation glow strength
-export const uImpasto = uniform(1.5); // canvas relief / texture (impasto)
-export const uChroma = uniform(1.04); // grade saturation (lifted toward the reference's vivid greens)
-export const uVignette = uniform(0.84); // corner darkening amount
-export const uBleed = uniform(0.0); // oil-paint smear strength (off)
+export const uGlow = uniform(0.5); // halation glow strength
+export const uImpasto = uniform(1.05); // canvas relief / texture (impasto)
+export const uChroma = uniform(0.99); // grade saturation
+export const uVignette = uniform(0.72); // corner darkening amount
+export const uBleed = uniform(0.08); // oil-paint smear strength
 
 // Splat / stroke shaping (SplatMaterial.ts).
-export const uStrokeBias = uniform(0.77); // length-axis elongation bias (aAspect.add)
+export const uStrokeBias = uniform(1.05); // length-axis elongation bias (aAspect.add)
 export const uSizeFloor = uniform(0.006); // distance size-floor coefficient (depth.mul)
 export const uWind = uniform(WIND_STRENGTH); // wind sway strength (config)
-export const uSizeJitter = uniform(0.19); // per-stamp size irregularity (1 ± fraction)
-export const uAngleJitter = uniform(2.5); // per-stamp direction irregularity (radians)
+export const uSizeJitter = uniform(0.14); // per-stamp size irregularity (1 ± fraction)
+export const uAngleJitter = uniform(1.55); // per-stamp direction irregularity (radians)
 
 // Atmosphere — splat-side manual fog. scene.fog is updated separately in JS from
 // the SAME values (see jsSettings.fogNear / fogFar + Controls.ts).

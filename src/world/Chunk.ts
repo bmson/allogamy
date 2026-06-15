@@ -165,10 +165,10 @@ export class Chunk {
       // few turf dabs read instead as wet mud — the soggy, broken shoreline where
       // the brook laps the meadow — so the bank reads ragged, not a drawn outline.
       const margin = path > 0.06 && path < 0.42; // the frayed transition band
-      const wetEdge = grassy && margin && rnd() < 0.32;
+      const wetEdge = grassy && margin && rnd() < 0.22;
       const bankDirtStrength = THREE.MathUtils.smoothstep(path, 0.045, 0.22)
         * (1 - THREE.MathUtils.smoothstep(path, 0.46, 0.66));
-      const bankDirt = rock < 0.55 && bankDirtStrength > 0 && rnd() < bankDirtStrength * 0.78;
+      const bankDirt = rock < 0.55 && bankDirtStrength > 0 && rnd() < bankDirtStrength * 0.58;
       // The channel itself (strong path, not rock) reads as calm water surface.
       const watery = path >= 0.42 && rock < 0.4;
 
@@ -243,45 +243,45 @@ export class Chunk {
             wind = 0.45 + rnd() * 0.35;
           } else {
             // round-ish turf dabs, also more varied in size/shape/height
-            scale = 0.8 + rnd() * 1.4;
-            aspect = rnd() < 0.4 ? 1.2 + rnd() * 1.2 : 0.85 + rnd() * 0.4;
+            scale = 0.72 + rnd() * 1.25;
+            aspect = rnd() < 0.62 ? 1.55 + rnd() * 1.75 : 1.05 + rnd() * 0.65;
+            angle = (rnd() - 0.5) * 0.7;
             yoff = 0.4 + rnd() * 1.4;
             wind = 0.4 + rnd() * 0.18;
           }
         }
       } else if (watery) {
-        // Underpaint below the real animated stream mesh. These dabs sit low in the
-        // carved bed as colour depth/sparkle; the moving water ribbon now carries
-        // the visible surface, so the river no longer reads as static painted grass.
+        // Underpaint below the real animated stream mesh. Keep it broad and quiet:
+        // the moving ribbon carries the water read, while these strokes provide one
+        // soft wash of pigment beneath it instead of speckled sparkle.
         field.mixColor(x, z, y, slope, path, rock, cc);
-        const sheen = THREE.MathUtils.clamp(0.86 + 0.22 * ndotl, 0.74, 1.12);
+        const sheen = THREE.MathUtils.clamp(0.88 + 0.12 * ndotl, 0.8, 1.03);
         cc.multiplyScalar(sheen);
-        const g = rnd();
-        if (g < 0.06) cc.lerp(palette.skyHorizon, 0.28 + rnd() * 0.32); // muted sky glint under the ribbon
-        else if (g < 0.09) cc.lerp(palette.sun, 0.22 + rnd() * 0.22);    // rare warm glint
-        scale = 0.45 + rnd() * 0.75;
-        yoff = 0.03 + rnd() * 0.09;
+        if (rnd() < 0.14) cc.lerp(palette.skyHorizon, 0.1 + rnd() * 0.16);
+        scale = 0.95 + rnd() * 1.65;
+        yoff = 0.01 + rnd() * 0.035;
         wind = 0;
-        angle = rnd() * Math.PI;
-        aspect = 0.9 + rnd() * 0.3; // round, never blade-ish
+        angle = (rnd() - 0.5) * 0.35;
+        aspect = 2.9 + rnd() * rnd() * 3.4; // long pencil-wash strokes, not stipple
       } else {
         // The wet shoreline / cut bank: soggy dark mud where the brook meets the
         // turf, exposed earth on steeper shoulders, and the rare bare rock dab.
         // These sit low and still so a bank reads as ground, not waving grass.
         field.mixColor(x, z, y, slope, path, rock, cc);
-        const shade = THREE.MathUtils.clamp(0.62 + 0.5 * ndotl, 0.5, 1.12);
+        const shade = THREE.MathUtils.clamp(0.7 + 0.34 * ndotl, 0.58, 1.06);
         if (bankDirt) {
           cc.copy(palette.pathEarth)
             .lerp(palette.pathEarthDry, 0.16 + rnd() * 0.16)
-            .lerp(palette.waterEdge, THREE.MathUtils.clamp(0.16 + path * 0.56, 0, 0.7))
-            .lerp(palette.rockShadow, 0.08 + rnd() * 0.22);
+            .lerp(palette.waterEdge, THREE.MathUtils.clamp(0.12 + path * 0.44, 0, 0.56))
+            .lerp(palette.rockShadow, 0.04 + rnd() * 0.14);
         } else if (rnd() < 0.12) cc.copy(palette.rock).lerp(palette.rockShadow, rnd());
         else if (wetEdge) cc.copy(palette.pathEarth).lerp(palette.waterEdge, 0.45 + rnd() * 0.25); // wet-mud / damp shore fleck
         cc.multiplyScalar(shade);
-        scale = bankDirt ? 0.55 + rnd() * 0.75 : wetEdge ? 0.6 + rnd() * 0.6 : 0.9 + rnd() * 0.8;
+        scale = bankDirt ? 0.75 + rnd() * 1.15 : wetEdge ? 0.8 + rnd() * 0.9 : 0.9 + rnd() * 0.8;
         yoff = bankDirt || wetEdge ? 0.14 + rnd() * 0.26 : yoff; // shore mud hugs the ground
         wind = 0;
-        aspect = bankDirt ? 0.8 + rnd() * 0.7 : 0.95 + rnd() * 0.2;
+        angle = bankDirt ? (rnd() - 0.5) * 0.9 : angle;
+        aspect = bankDirt ? 1.8 + rnd() * 1.6 : 1.2 + rnd() * 0.6;
       }
 
       centers[w * 3] = x;
