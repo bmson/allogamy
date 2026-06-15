@@ -217,7 +217,7 @@ export function scatterWeeds(field: TerrainField, cx: number, cz: number): Chunk
 
   // Scatter grid. DENSITY: coarsened (was 26) so the undergrowth is a light plush
   // hint between the turf and bushes, not a wall-to-wall carpet of cushions.
-  const cells = 17;
+  const cells = 13;
   const cs = S / cells;
   for (let gz = 0; gz < cells; gz++) {
     for (let gx = 0; gx < cells; gx++) {

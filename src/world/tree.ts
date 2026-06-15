@@ -803,7 +803,7 @@ export function scatterTrees(
 
   // DENSITY: coarser scatter grid (was 13) and a lower placement chance so groves
   // read as distinct masses with breathing room rather than a solid wall of trees.
-  const cells = 11;
+  const cells = 9;
   const cellSize = S / cells;
   for (let gz = 0; gz < cells; gz++) {
     for (let gx = 0; gx < cells; gx++) {
@@ -857,7 +857,7 @@ export function scatterTrees(
   // ---- bushes + scrub: foliage-only ground cover ----
   // DENSITY: coarser grid (was 22) and a lower chance so ground cover is a light
   // scatter of distinct shrubs, not a continuous thicket.
-  const bcells = 16;
+  const bcells = 12;
   const bcs = S / bcells;
   for (let gz = 0; gz < bcells; gz++) {
     for (let gx = 0; gx < bcells; gx++) {

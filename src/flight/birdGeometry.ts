@@ -1381,44 +1381,53 @@ export function buildLeg(): THREE.BufferGeometry {
   });
 }
 
-export function buildFoot(side: number): THREE.BufferGeometry {
-  const toeLen = 0.17;
-  const toeAngles = [-0.4, 0, 0.4];
-  const tips = toeAngles.map((a) =>
-    new THREE.Vector3(side * Math.sin(a) * toeLen, -0.014, -Math.cos(a) * toeLen));
-  const parts: THREE.BufferGeometry[] = [];
-  for (const tip of tips) {
-    const N = 5;
-    const spine: THREE.Vector3[] = [], radii: number[] = [];
-    for (let s = 0; s < N; s++) {
-      const t = s / (N - 1);
-      spine.push(new THREE.Vector3(tip.x * t, tip.y * t - 0.01 * Math.sin(Math.PI * t), tip.z * t));
-      radii.push(0.013 * (1 - 0.75 * t) + 0.0025);
-    }
-    parts.push(sweepTube(spine, radii, 8));
+export const FOOT_TOE_ANGLES = [-0.4, 0, 0.4] as const;
+const FOOT_TOE_LEN = 0.17;
+
+export function buildFootToe(side: number, angle: number): THREE.BufferGeometry {
+  const tip = new THREE.Vector3(side * Math.sin(angle) * FOOT_TOE_LEN, -0.014, -Math.cos(angle) * FOOT_TOE_LEN);
+  const N = 5;
+  const spine: THREE.Vector3[] = [], radii: number[] = [];
+  for (let s = 0; s < N; s++) {
+    const t = s / (N - 1);
+    spine.push(new THREE.Vector3(tip.x * t, tip.y * t - 0.01 * Math.sin(Math.PI * t), tip.z * t));
+    radii.push(0.013 * (1 - 0.75 * t) + 0.0025);
   }
+  const g = sweepTube(spine, radii, 8);
+  roughen(g, 0.0012, 48);
+  return paint(g, (c, _x, _y, _z, nx, ny, nz) => {
+    c.copy(C_LEG).lerp(C_LEG_DARK, Math.max(0, -ny) * 0.3);
+    c.multiplyScalar(sunlit(nx, ny, nz, 0.1));
+  });
+}
+
+export function buildFootWeb(side: number): THREE.BufferGeometry {
   const NU = 13, NV = 5;
   const top: number[] = [], bot: number[] = [];
   for (let i = 0; i < NU; i++) {
     const u = i / (NU - 1);
-    const ang = toeAngles[0] + (toeAngles[2] - toeAngles[0]) * u;
+    const ang = FOOT_TOE_ANGLES[0] + (FOOT_TOE_ANGLES[2] - FOOT_TOE_ANGLES[0]) * u;
     const between = Math.sin(u * Math.PI * 2);
     for (let j = 0; j < NV; j++) {
       const v = j / (NV - 1);
-      const reach = toeLen * v;
+      const reach = FOOT_TOE_LEN * v;
       const x = side * Math.sin(ang) * reach;
       const z = -Math.cos(ang) * reach;
       const y = -0.012 * v - 0.016 * Math.abs(between) * v;
       top.push(x, y + 0.0035, z); bot.push(x, y - 0.0035, z);
     }
   }
-  parts.push(membraneFromGrids(top, bot, NU, NV, side < 0));
+  return paint(membraneFromGrids(top, bot, NU, NV, side < 0), (c, _x, _y, _z, nx, ny, nz) => {
+    c.copy(C_WEB).lerp(C_LEG_DARK, Math.max(0, -ny) * 0.25);
+    c.multiplyScalar(sunlit(nx, ny, nz, 0.1));
+  });
+}
+
+export function buildFoot(side: number): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = FOOT_TOE_ANGLES.map((angle) => buildFootToe(side, angle));
+  parts.push(buildFootWeb(side));
   const merged = mergeGeometries(parts, false)!;
   parts.forEach((p) => p.dispose());
   merged.computeVertexNormals();
-  return paint(merged, (c, _x, y, _z, nx, ny, nz) => {
-    const onWeb = Math.abs(y) < 0.008;
-    c.copy(onWeb ? C_WEB : C_LEG).lerp(C_LEG_DARK, Math.max(0, -ny) * 0.3);
-    c.multiplyScalar(sunlit(nx, ny, nz, 0.1));
-  });
+  return merged;
 }

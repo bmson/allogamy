@@ -61,6 +61,8 @@ export class Chunk {
     const SL = new Float32Array(vcount);
     const PA = new Float32Array(vcount);
     const RO = new Float32Array(vcount);
+    const TI = new Float32Array(vcount);
+    const DR = new Float32Array(vcount);
     const NX = new Float32Array(vcount); // surface normal, for sun shading
     const NZ = new Float32Array(vcount);
     let minY = Infinity;
@@ -76,6 +78,8 @@ export class Chunk {
         if (h > maxY) maxY = h;
         const s = field.surface(x, z);
         SL[idx] = s.slope; PA[idx] = s.path; RO[idx] = s.rock;
+        TI[idx] = field.tint(x, z);
+        DR[idx] = field.dry(x, z);
         NX[idx] = s.nx; NZ[idx] = s.nz;
       }
     }
@@ -92,7 +96,7 @@ export class Chunk {
         const y = H[idx];
         pos[idx * 3] = x; pos[idx * 3 + 1] = y; pos[idx * 3 + 2] = z;
         field.mixColor(x, z, y, SL[idx], PA[idx], RO[idx], c);
-        const t = field.tint(x, z);
+        const t = TI[idx];
         c.offsetHSL(t * 0.022, t * 0.045, t * 0.035);
         col[idx * 3] = c.r; col[idx * 3 + 1] = c.g; col[idx * 3 + 2] = c.b;
       }
@@ -189,7 +193,7 @@ export class Chunk {
           // Light-coupled HSL turf: warm sunlit yellow-green → cool deep shade,
           // hot-lime dry patches, occasional deep-shadow pockets. Light is baked
           // into lightness here (do NOT also multiply by shade).
-          const tint = field.tint(x, z) * 0.5 + 0.5;
+          const tint = bilin(TI, dim, gx, gz) * 0.5 + 0.5;
           // Hue pulled a hair WARMER than the canopy (which is now cooler/deeper) so
           // the meadow and the tree masses separate cleanly in both hue and value.
           let h = 0.30 - lit * 0.09 + (tint - 0.5) * 0.06 + (rnd() - 0.5) * 0.1; // warm sunlit yellow-green ↔ cool blue-green shade (temperature sculpts form, like the reference)
@@ -204,7 +208,7 @@ export class Chunk {
           const gv = rnd();
           if (gv < 0.1) { h = 0.1 + rnd() * 0.05; s = 0.42 + rnd() * 0.12; } // dry straw / golden tuft
           else if (gv < 0.22) { h = 0.34 + rnd() * 0.04; s = 0.5 + rnd() * 0.12; } // deep cool-green blade
-          if (field.dry(x, z) > 0.62) { h = 0.12; s = 0.45; l = 0.46 + lit * 0.08; } // golden-brown dry earth patch
+          if (bilin(DR, dim, gx, gz) > 0.62) { h = 0.12; s = 0.45; l = 0.46 + lit * 0.08; } // golden-brown dry earth patch
           // A mild clump-to-clump dip for life — never the near-black it used to crush to.
           if (rnd() < 0.14) { l -= 0.05; }
           cc.setHSL(h, THREE.MathUtils.clamp(s, 0, 1), THREE.MathUtils.clamp(l, 0.22, 0.95)); // varied ground tone, off black
@@ -281,12 +285,12 @@ export class Chunk {
     // shore append below. Each keeps its exact per-instance data — the merge only
     // collapses draw calls, the painted field is byte-for-byte the same.
     const splatLayers: SplatLayer[] = [{
-      centers: centers.slice(0, w * 3),
-      scales: scales.slice(0, w),
-      colors: colors.slice(0, w * 3),
-      winds: winds.slice(0, w),
-      angles: angles.slice(0, w),
-      aspects: aspects.slice(0, w),
+      centers: w === N ? centers : centers.slice(0, w * 3),
+      scales: w === N ? scales : scales.slice(0, w),
+      colors: w === N ? colors : colors.slice(0, w * 3),
+      winds: w === N ? winds : winds.slice(0, w),
+      angles: w === N ? angles : angles.slice(0, w),
+      aspects: w === N ? aspects : aspects.slice(0, w),
     }];
     // Bound that actually covers the chunk (the quad template is tiny). Foliage is
     // taller than the heightfield, so the radius grows below to cover canopies.

@@ -159,8 +159,8 @@ export class World {
     this.queue.length = kept;
   }
 
-  /** Build up to `max` queued chunks this frame, nearest to the bird first. */
-  tickGeneration(max = 3) {
+  /** Build queued chunks nearest-first, stopping after `max` or the frame budget. */
+  tickGeneration(max = 2, budgetMs = 8) {
     if (this.queue.length === 0) return;
     // Re-order nearest-first only when the queue's membership has changed since the
     // last build. The bird moves smoothly, so re-planning that happens at most once
@@ -173,6 +173,7 @@ export class World {
       this.queueDirty = false;
     }
     let n = 0;
+    const start = nowMs();
     // The queue is sorted farthest-first, so the nearest chunks sit at the tail and
     // pop() drains them in O(1) without the O(n) shift() did on every build.
     while (n < max && this.queue.length) {
@@ -186,6 +187,9 @@ export class World {
       this.scene.add(ch.group);
       this.chunks.set(key, ch);
       n++;
+      // Always build at least one chunk when work exists, then respect the caller's
+      // frame budget so terrain streaming doesn't hitch the flight/render loop.
+      if (n > 0 && nowMs() - start >= budgetMs) break;
     }
   }
 
@@ -211,4 +215,8 @@ function dist2(c: { cx: number; cz: number }, fx: number, fz: number): number {
   const x = (c.cx + 0.5) * CHUNK_SIZE - fx;
   const z = (c.cz + 0.5) * CHUNK_SIZE - fz;
   return x * x + z * z;
+}
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }

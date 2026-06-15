@@ -5,7 +5,7 @@ export const WORLD_SEED = 1337;
 
 // Terrain chunk grid (world units).
 export const CHUNK_SIZE = 160; // metres per chunk edge
-export const CHUNK_RES = 36; // heightfield quads per chunk edge (~4.4 m cells)
+export const CHUNK_RES = 28; // heightfield quads per chunk edge (~5.7 m cells)
 
 // Streaming radii, measured in chunks from the bird. LOAD edge (5 * 160 = 800 m)
 // sits comfortably beyond FOG_FAR (560 m), so new chunks are born ~240 m deep in
@@ -16,12 +16,11 @@ export const UNLOAD_RADIUS = 4; // free as soon as out of load range. Fog is OFF
 // is plenty of view at this FOV and roughly halves the live chunk/instance/draw-call
 // count. The biggest single perf lever after the depth-write fix.
 
-// Splat density per chunk — high, for the wall-to-wall painted carpet, but trimmed
-// from 40000 to 22000: with the size-floor keeping distant dabs plush and the
-// depth-write fix collapsing overdraw, the carpet still reads wall-to-wall while
-// each chunk carries ~45% fewer instances (a direct cut to vertex + fill work).
+// Splat density per chunk — high enough for a wall-to-wall painted carpet, but
+// kept under the old 22k budget so both chunk generation and alpha-fill cost stay
+// smooth. The size floor and broad dab scale keep the meadow plush at this count.
 // Tune live via SPLAT_DENSITY without touching code if perf needs it.
-export const SPLATS_PER_CHUNK = 22000;
+export const SPLATS_PER_CHUNK = 12000;
 export const SPLAT_DENSITY = 1.0;
 
 // Wind sway strength (world units), scaled per-instance by aWind.

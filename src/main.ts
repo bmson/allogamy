@@ -40,7 +40,9 @@ async function main() {
   engine.add(bird); // ticks right after flight so it reads current position/angles
   engine.add(adapt((_dt, t) => {
     world.update(flight.position);
-    world.tickGeneration(3);
+    // Build fast behind the loading overlay, then switch to an adaptive frame budget
+    // once flying so chunk construction cannot monopolise the render loop.
+    world.tickGeneration(revealed ? (_dt < 1 / 50 ? 2 : 1) : 6, revealed ? 5 : 48);
     world.tickFauna(t);
   }));
   engine.add(sky);

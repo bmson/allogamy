@@ -12,9 +12,9 @@ export interface Updatable {
 // flow bleed + glow over the WHOLE frame) AND the dense, heavily-overdrawn splat
 // carpet are fill-rate bound, so fragment cost scales with backbuffer pixels². On a
 // 2× Retina / 3× phone display the native ratio quadruples that work for detail the
-// soft, blended painterly look throws away anyway. 1.5 keeps edges acceptably crisp
-// while cutting fragment work to ~56% of the 2× budget (1.5²/2²) — a big, free win.
-const MAX_PIXEL_RATIO = 1.5;
+// soft, blended painterly look throws away anyway. 1.25 keeps the canvas crisp enough
+// for the brushy post pass while cutting fragment work to ~39% of the 2× budget.
+const MAX_PIXEL_RATIO = 1.25;
 
 /** WebGPU-only renderer. `init()` throws on browsers without WebGPU. */
 async function createRenderer(): Promise<THREE.WebGPURenderer> {
