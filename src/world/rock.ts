@@ -336,18 +336,20 @@ export function buildBoulders(
   let total = 0;
 
   // ---- scattered lone stones -----------------------------------------------
-  // Many candidates, gated by terrain: dense on rocky/steep ground, rare on grass.
-  const scatter = 12 + Math.floor(rnd() * 10);
+  // Many candidates, gated by terrain: dense on rocky/steep ground, but now common
+  // enough in open meadow that the ground reads physically littered with stone.
+  const scatter = 24 + Math.floor(rnd() * 16);
   for (let i = 0; i < scatter; i++) {
     const x = ox + rnd() * S;
     const z = oz + rnd() * S;
     const surf = field.surface(x, z);
-    // Higher base so lone stones dot the open MEADOW too, not just rocky/steep ground.
-    const p = 0.22 + surf.rock * 0.7 + surf.slope * 0.35;
+    // Higher base so lone stones dot the open meadow too, not just rocky/steep ground.
+    const p = 0.42 + surf.rock * 0.75 + surf.slope * 0.42;
     if (rnd() > p) continue;
 
-    // Squared bias → mostly pebbles & small stones, the occasional larger boulder.
-    const radius = 0.7 + rnd() * rnd() * 5.5;
+    // Squared bias → mostly pebbles & small stones, plus the occasional larger
+    // boulder. The lower floor adds visible hand-sized rocks without bloating LOD.
+    const radius = 0.5 + rnd() * rnd() * 5.7 + (rnd() < 0.2 ? rnd() * 2.0 : 0);
     // Smaller stones rounder (tumbled); bigger ones more fractured/angular.
     const angular = THREE.MathUtils.clamp(0.25 + radius * 0.12 + (rnd() - 0.5) * 0.4, 0, 1);
     // Roughly a quarter become flat-topped resting slabs (squared bias keeps most
@@ -361,16 +363,16 @@ export function buildBoulders(
   // outcrop — varied sizes around a centre, overlapping so they read as one mass.
   // Sometimes a second satellite cluster nearby so the stone gathers in family
   // groups (a couple of heaps) rather than one lonely pile per chunk.
-  const clusters = 1 + (rnd() < 0.6 ? 1 : 0);
+  const clusters = 2 + (rnd() < 0.72 ? 1 : 0) + (rnd() < 0.25 ? 1 : 0);
   for (let cI = 0; cI < clusters; cI++) {
     const ax = ox + rnd() * S;
     const az = oz + rnd() * S;
     const csurf = field.surface(ax, az);
-    const clusterP = 0.4 + csurf.rock * 0.7 + csurf.slope * 0.4;
+    const clusterP = 0.58 + csurf.rock * 0.72 + csurf.slope * 0.48;
     if (rnd() >= clusterP) continue;
 
-    const n = 3 + Math.floor(rnd() * 5); // 3..7 stones
-    const big = 2.5 + rnd() * 4.0; // dominant boulder size
+    const n = 5 + Math.floor(rnd() * 6); // 5..10 stones
+    const big = 2.2 + rnd() * 4.4; // dominant boulder size
     const spread = big * (0.7 + rnd() * 0.8);
     for (let j = 0; j < n; j++) {
       const a = rnd() * Math.PI * 2;
@@ -386,6 +388,28 @@ export function buildBoulders(
       const tabular = rnd() < 0.35 ? rnd() * 0.7 + 0.15 : 0;
       total += placeBoulder(field, rnd, bx, bz, radius, angular, tabular, acc);
     }
+  }
+
+  // ---- creek-edge stones ---------------------------------------------------
+  // The flight camera often follows the river, so tuck small stones and the odd
+  // larger slab into the exposed bank / shallow channel. This makes the waterline
+  // feel physical and gives the player more readable "stuff" in the foreground.
+  const bankScatter = 12 + Math.floor(rnd() * 8);
+  for (let i = 0; i < bankScatter; i++) {
+    const x = ox + rnd() * S;
+    const z = oz + rnd() * S;
+    const path = field.pathMask(x, z);
+    if (path < 0.12 || path > 0.58) continue;
+    const surf = field.surface(x, z);
+    if (surf.slope > 0.78) continue;
+
+    const edgeBias = 1 - Math.abs(path - 0.36) / 0.32;
+    if (rnd() > 0.34 + edgeBias * 0.5) continue;
+
+    const radius = 0.45 + rnd() * rnd() * 2.7 + (rnd() < 0.18 ? rnd() * 1.4 : 0);
+    const angular = THREE.MathUtils.clamp(0.35 + radius * 0.18 + rnd() * 0.24, 0, 1);
+    const tabular = rnd() < 0.38 ? 0.2 + rnd() * 0.65 : 0;
+    total += placeBoulder(field, rnd, x, z, radius, angular, tabular, acc);
   }
 
   if (total === 0) return null;

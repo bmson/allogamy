@@ -173,17 +173,29 @@ export class Chunk {
       const watery = path >= 0.42 && rock < 0.4;
 
       if (grassy && !wetEdge && !bankDirt) {
-        if (rnd() < 0.022) {
-          // a pale weathered stone / pebble nestled in the turf — stone variety
-          // scattered across the meadow (cf. the reference), not just on rock faces.
-          // Kept sparse so the turf reads clean.
+        const accentRoll = rnd();
+        if (accentRoll < 0.07) {
+          // Pale weathered stones / pebbles nestled in the turf: more frequent now
+          // so the meadow has readable grit and small grounded landmarks between
+          // the larger faceted boulders.
           cc.copy(palette.rock).lerp(palette.rockShadow, rnd() * 0.6);
           const stoneShade = THREE.MathUtils.clamp(0.7 + 0.4 * ndotl, 0.55, 1.1);
           cc.multiplyScalar(stoneShade);
-          scale = 0.6 + rnd() * rnd() * 1.6; // mostly small grit, the rare bigger stone
-          yoff = 0.2 + rnd() * 0.35; // sits low, on the ground
+          scale = 0.45 + rnd() * rnd() * 2.1; // mostly grit, the odd larger cobble dab
+          yoff = 0.16 + rnd() * 0.28; // sits low, on the ground
           wind = 0; angle = rnd() * Math.PI; aspect = 0.9 + rnd() * 0.3;
-        } else if (rnd() < 0.012) {
+        } else if (accentRoll < 0.095) {
+          // Fallen bark/twig flecks: long low strokes in warm browns, especially
+          // useful under trees and along banks to make the world feel inhabited.
+          cc.copy(palette.bark).lerp(palette.barkDark, 0.35 + rnd() * 0.45);
+          cc.lerp(palette.pathEarthDry, rnd() * 0.18);
+          cc.multiplyScalar(THREE.MathUtils.clamp(0.7 + 0.35 * ndotl, 0.52, 1.08));
+          scale = 0.42 + rnd() * 0.95;
+          yoff = 0.18 + rnd() * 0.22;
+          wind = 0;
+          angle = rnd() * Math.PI;
+          aspect = 1.9 + rnd() * rnd() * 3.2;
+        } else if (accentRoll < 0.108) {
           // wildflower fleck floating just above the grass — colour punctuation,
           // kept SPARSE and mostly white/violet so the meadow doesn't read acid-yellow.
           // DENSITY: rate lowered further (was 0.022) — flowers.ts carries the blooms;
