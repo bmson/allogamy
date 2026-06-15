@@ -147,6 +147,13 @@ export class Bird implements Updatable {
   // S-neck. A second-order spring driven by the heave gives it weight (no jitter).
   private neckFlex = 0;
   private neckFlexVel = 0;
+  // whole-body elastic lag: a soft spring that compresses/lengthens the torso as the
+  // bird loads a downstroke, changes pitch, or rolls into a turn. This drives visible
+  // flesh follow-through so the body doesn't read as a fixed carved shell.
+  private bodyElastic = 0;
+  private bodyElasticVel = 0;
+  private turnElastic = 0;
+  private turnElasticVel = 0;
 
   constructor(scene: THREE.Scene, flight: FlightController) {
     this.flight = flight;
@@ -435,6 +442,25 @@ export class Bird implements Updatable {
     // --- asymmetric drive: sharp loaded downstroke, slower lifted recovery ---
     const drive = Math.sin(ph) - DOWN_BIAS * Math.sin(2 * ph);
     const driveDown = Math.max(0, drive);
+    const recover = Math.max(0, -Math.sin(ph - 0.3));
+    {
+      const bodyTarget = 0.55 * driveDown * amp - 0.28 * recover * amp + 0.25 * mPitch - 0.18 * bankMagSoft;
+      const turnTarget = clamp(lead * 1.7 + mRoll * 0.32, -0.85, 0.85);
+      const sub = dt > 1 / 90 ? 2 : 1;
+      const h = dt / sub;
+      for (let k = 0; k < sub; k++) {
+        const bodyA = 38 * (bodyTarget - this.bodyElastic) - 10.5 * this.bodyElasticVel;
+        this.bodyElasticVel += bodyA * h;
+        this.bodyElastic += this.bodyElasticVel * h;
+        const turnA = 34 * (turnTarget - this.turnElastic) - 9.2 * this.turnElasticVel;
+        this.turnElasticVel += turnA * h;
+        this.turnElastic += this.turnElasticVel * h;
+      }
+      if (!isFinite(this.bodyElastic)) { this.bodyElastic = 0; this.bodyElasticVel = 0; }
+      if (!isFinite(this.turnElastic)) { this.turnElastic = 0; this.turnElasticVel = 0; }
+    }
+    const bodyElastic = clamp(this.bodyElastic, -0.55, 0.75);
+    const turnElastic = clamp(this.turnElastic, -0.75, 0.75);
 
     // Flap shares: the SHOULDER carries only a SMALL part of the raw swing now, so
     // the big visible beat happens OUTBOARD of the buried wing root. The buried
@@ -573,13 +599,15 @@ export class Bird implements Updatable {
     const breath2 = 0.5 + 0.5 * Math.sin(idle * 0.63 + 1.7); // a second slower swell
     // organic squash/stretch: belly fills & flank widens on the breath/downstroke,
     // body lengthens on the recovery. Small, supple, always alive.
-    const recover = Math.max(0, -flex);
     const fill = 0.058 * driveDown * amp + 0.026 * breath + 0.012 * breath2;
-    const lengthen = 0.052 * recover * amp + 0.018 * breath2;
+    const elasticFill = 0.038 * Math.max(0, bodyElastic);
+    const elasticLength = 0.05 * Math.max(0, -bodyElastic);
+    const turnSquash = 0.024 * Math.abs(turnElastic);
+    const lengthen = 0.052 * recover * amp + 0.018 * breath2 + elasticLength;
     this.bTorso.scale.set(
-      1 + fill + 0.008 * breath,            // widen (X)
-      1 - 0.34 * fill + 0.014 * breath,     // flatten as it widens (Y) — volume-ish
-      1 + lengthen - 0.008 * driveDown * amp, // stretch fore-aft on recovery (Z)
+      1 + fill + elasticFill + turnSquash + 0.008 * breath, // widen (X)
+      1 - 0.34 * fill - 0.24 * elasticFill + 0.014 * breath, // flatten as it widens (Y)
+      1 + lengthen - 0.012 * driveDown * amp - 0.018 * elasticFill, // stretch fore-aft on recovery
     );
     // The torso bone moves the body skin RELATIVE to the wing meshes (the wings
     // live under `bob`, not under this bone), so its arc is kept GENTLE — just
@@ -589,12 +617,15 @@ export class Bird implements Updatable {
     // shoulder fairing locked to the wing root: no gap opens as the body morphs.
     this.bTorso.rotation.x = 0.048 * flex * amp       // wingbeat tuck/extend
       + 0.09 * mPitch                                 // mild chest tip with climb/dive
+      + 0.065 * bodyElastic
       + 0.028 * Math.sin(idle * 0.7)
       + 0.014 * Math.sin(idle * 1.22 - 0.4);          // quiet overlapping breath
     this.bTorso.rotation.y = -0.065 * mRoll - 0.06 * lead
+      - 0.085 * turnElastic
       + 0.02 * Math.sin(idle * 0.84 + 1.2)
       + 0.02 * Math.sin(ph - 0.6) * amp;              // mild waist yaw INTO the turn
     this.bTorso.rotation.z = -0.05 * mRoll + 0.018 * Math.sin(idle * 0.58 - 0.9)
+      - 0.075 * turnElastic
       + 0.012 * Math.sin(ph - 1.4) * amp;             // subtle roll-with-bank
 
     // --- NECK FLEX: the neck is no longer static. A second-order spring drives an
@@ -606,6 +637,7 @@ export class Bird implements Updatable {
     const flexTarget = 0.55 * driveDown * amp           // heave-coupled extend on the downstroke
       + 0.18 * mPitch                                   // reach up into a climb / gather in a dive
       + 0.12 * Math.sin(idle * 0.5)                     // faint idle breath so a glide stays alive
+      + 0.16 * bodyElastic
       - 0.20 * Math.max(0, -flex) * amp;                // compress as the chest stretches on recovery
     // critically-ish damped spring → weighty, no jitter (sub-stepped for stability)
     {
@@ -655,11 +687,11 @@ export class Bird implements Updatable {
       // curve, never a kink.
       const sway = 0.045 * Math.sin(idle * 0.55 - lag * 0.7) * (0.5 + 0.5 * f)
         + 0.02 * Math.sin(ph * 0.5 - lag) * amp;       // a faint wing-driven side weave
-      n[i].rotation.y = sway - 0.11 * mRoll * f - 0.05 * lead * f; // sweep the front half INTO the turn (+roll → −X)
+      n[i].rotation.y = sway - 0.11 * mRoll * f - 0.05 * lead * f - 0.065 * turnElastic * f; // sweep into the turn
       // axial roll: the neck progressively counter-rolls toward level (each bone
       // unwinds a little of the body's bank) so by the head the gaze is near
       // horizontal — the supple neck does the levelling, not a snap at the skull.
-      n[i].rotation.z = -0.07 * mRoll * f;
+      n[i].rotation.z = -0.07 * mRoll * f - 0.04 * turnElastic * f;
     }
     // HEAD GAZE — the head LOOKS WHERE THE BIRD IS GOING. Instead of locking level on
     // the horizon, the head aims along the FLIGHT/TRAVEL direction: it tips UP when
@@ -700,46 +732,53 @@ export class Bird implements Updatable {
     // the rear of the welded skin + the rump tube + the faired tail fan AS ONE — so
     // the fan springs from the body and follows it without detaching. ---
     this.bTail.rotation.x = 0.12 * Math.sin(ph - TAIL_LAG) * amp
-      + 0.22 * mPitch;                                   // VERTICAL arc: tail lifts in a climb (body bows into a C)
+      + 0.22 * mPitch - 0.11 * bodyElastic;              // VERTICAL arc + elastic counter-bow
     this.bTail.rotation.y = -0.38 * mRoll - 0.11 * lead
-      + 0.05 * Math.sin(idle * 0.62 + 2.4);              // swing the fan as a rudder, coordinated with the yaw
-    this.bTail.rotation.z = 0.24 * mRoll + 0.03 * Math.sin(idle * 0.75); // twist/bank the fan with the body
+      - 0.16 * turnElastic + 0.05 * Math.sin(idle * 0.62 + 2.4); // rudder follow-through
+    this.bTail.rotation.z = 0.24 * mRoll + 0.11 * turnElastic + 0.03 * Math.sin(idle * 0.75); // twist/bank
     // the rectrices FAN OPEN in a turn — the tail spreads to bite as a rudder/airbrake,
     // widening the fan laterally as the bank deepens, then folding back as it unwinds.
     // Kept modest so the (TAIL-weighted) rump flesh only flares subtly while the fan,
     // which is the widest, lightest part of that bone's region, reads as spreading.
-    this.bTail.scale.set(1 + 0.16 * bankMagSoft, 1, 1 + 0.04 * bankMagSoft);
+    this.bTail.scale.set(1 + 0.16 * bankMagSoft + 0.06 * Math.abs(turnElastic), 1, 1 + 0.04 * bankMagSoft);
 
     // --- trailing legs & feet ---
     for (let i = 0; i < this.legs.length; i++) {
       const { hip, ankle, foot, web, toes, sgn } = this.legs[i];
       const lp = idle * 0.95 + i * 1.35;
-      const paddle = Math.sin(lp * 1.18 - 0.6) * 0.46 + Math.sin(ph - 1.1 + i * 0.8) * 0.42;
-      const tuck = clamp(0.2 + 0.28 * driveDown * amp + 0.26 * bankMagSoft + Math.max(0, mPitch) * 0.38, 0, 1);
-      const spread = clamp(0.28 + 0.5 * Math.max(0, -paddle) + 0.25 * bankMagSoft + 0.08 * Math.sin(lp * 0.7), 0, 1);
+      const footLag = Math.sin(lp * 0.72 + sgn * 0.55);
+      const paddle = Math.sin(lp * 1.18 - 0.6) * 0.58 + Math.sin(ph - 1.1 + i * 0.8) * 0.5
+        + bodyElastic * 0.22;
+      const tuck = clamp(0.22 + 0.36 * driveDown * amp + 0.34 * bankMagSoft + Math.max(0, mPitch) * 0.45
+        + Math.max(0, bodyElastic) * 0.35, 0, 1);
+      const spread = clamp(0.34 + 0.62 * Math.max(0, -paddle) + 0.32 * bankMagSoft
+        + 0.18 * Math.abs(turnElastic) + 0.1 * footLag, 0, 1);
       const dangle = Math.sin(lp * 0.82 + 0.4);
-      hip.position.y = -0.14 + 0.012 * Math.sin(lp * 0.9 + 0.5);
-      hip.position.z = -0.38 + 0.016 * Math.cos(lp * 0.8);
-      hip.rotation.x = -0.45 - 0.12 * tuck + 0.068 * Math.cos(ph - BOB_LAG + i * 0.55) * amp
-        + 0.05 * dangle;
-      hip.rotation.y = sgn * (0.04 * Math.sin(lp * 0.72 + 1.1) - 0.04 * mRoll);
-      hip.rotation.z = 0.2 * mRoll + sgn * (0.055 * Math.sin(lp * 0.8) + 0.03);
-      ankle.position.y = -0.05 + 0.01 * Math.sin(lp * 1.36 - 0.3);
-      ankle.position.z = -TARSUS_LEN + 0.014 * Math.cos(lp * 1.16);
-      ankle.rotation.x = 0.56 + 0.12 * paddle + 0.052 * driveDown * amp - 0.14 * tuck;
-      ankle.rotation.y = sgn * (0.075 * Math.sin(lp * 0.9 + 0.5) + 0.045 * mRoll);
-      ankle.rotation.z = sgn * (0.072 * Math.sin(lp * 0.65) + 0.045 * bankMagSoft);
+      const turnFoot = clamp(turnElastic + lead * 0.4, -0.7, 0.7);
+      hip.position.y = -0.14 + 0.018 * Math.sin(lp * 0.9 + 0.5) + 0.01 * bodyElastic;
+      hip.position.z = -0.38 + 0.025 * Math.cos(lp * 0.8) - 0.026 * tuck;
+      hip.rotation.x = -0.44 - 0.19 * tuck + 0.09 * Math.cos(ph - BOB_LAG + i * 0.55) * amp
+        + 0.075 * dangle - 0.05 * bodyElastic;
+      hip.rotation.y = sgn * (0.07 * Math.sin(lp * 0.72 + 1.1) - 0.055 * mRoll - 0.08 * turnFoot);
+      hip.rotation.z = 0.24 * mRoll + 0.12 * turnFoot + sgn * (0.085 * Math.sin(lp * 0.8) + 0.045);
+      ankle.position.y = -0.05 + 0.016 * Math.sin(lp * 1.36 - 0.3);
+      ankle.position.z = -TARSUS_LEN + 0.02 * Math.cos(lp * 1.16) - 0.018 * tuck;
+      ankle.rotation.x = 0.54 + 0.18 * paddle + 0.07 * driveDown * amp - 0.22 * tuck;
+      ankle.rotation.y = sgn * (0.12 * Math.sin(lp * 0.9 + 0.5) + 0.055 * mRoll + 0.08 * turnFoot);
+      ankle.rotation.z = sgn * (0.11 * Math.sin(lp * 0.65) + 0.065 * bankMagSoft + 0.06 * Math.abs(turnFoot));
 
-      foot.position.x = sgn * 0.006 * Math.sin(lp * 1.25 + 0.8);
-      foot.position.y = 0.004 * Math.sin(lp * 1.5 - 0.2);
-      foot.rotation.x = -0.14 + 0.17 * paddle - 0.09 * tuck + 0.035 * Math.sin(lp * 1.7);
-      foot.rotation.y = sgn * (0.14 + 0.085 * Math.sin(lp * 0.85 + 1.7) + 0.1 * spread);
-      foot.rotation.z = sgn * (0.1 * Math.sin(lp * 1.05 - 0.4) + 0.075 * mRoll);
-      foot.scale.set(1 + 0.04 * spread, 1, 1 + 0.06 * spread);
+      foot.position.x = sgn * (0.012 * Math.sin(lp * 1.25 + 0.8) + 0.012 * spread);
+      foot.position.y = 0.008 * Math.sin(lp * 1.5 - 0.2);
+      foot.position.z = -0.012 * tuck + 0.008 * Math.sin(lp * 1.1);
+      foot.rotation.x = -0.17 + 0.26 * paddle - 0.13 * tuck + 0.055 * Math.sin(lp * 1.7);
+      foot.rotation.y = sgn * (0.2 + 0.12 * Math.sin(lp * 0.85 + 1.7) + 0.17 * spread + 0.1 * turnFoot);
+      foot.rotation.z = sgn * (0.16 * Math.sin(lp * 1.05 - 0.4) + 0.1 * mRoll + 0.12 * turnFoot);
+      foot.scale.set(1.1 + 0.1 * spread, 1, 1.08 + 0.14 * spread);
 
-      web.rotation.x = 0.04 * paddle - 0.04 * tuck;
-      web.rotation.y = sgn * 0.045 * Math.sin(lp * 0.72 + 0.6);
-      web.scale.set(1 + 0.08 * spread, 1, 1 + 0.1 * spread);
+      web.rotation.x = 0.09 * paddle - 0.08 * tuck + 0.04 * Math.sin(lp * 1.6);
+      web.rotation.y = sgn * (0.075 * Math.sin(lp * 0.72 + 0.6) + 0.1 * turnFoot);
+      web.rotation.z = sgn * 0.05 * Math.sin(lp * 1.1 - 0.2);
+      web.scale.set(1 + 0.16 * spread, 1, 1 + 0.2 * spread);
 
       for (let j = 0; j < toes.length; j++) {
         const toe = toes[j];
@@ -747,10 +786,12 @@ export class Bird implements Updatable {
         const toePhase = lp * 1.22 + j * 0.74;
         const toeCurl = Math.sin(toePhase - 0.25) * 0.5 + paddle * 0.5;
         const toeReach = Math.max(0, -paddle) * (0.5 + 0.12 * j);
-        toe.rotation.x = 0.035 + 0.09 * toeCurl - 0.07 * tuck + 0.025 * Math.sin(toePhase * 1.6);
-        toe.rotation.y = -sgn * offset * (0.07 + 0.15 * spread + 0.025 * Math.sin(toePhase));
-        toe.rotation.z = sgn * offset * (0.025 * Math.sin(toePhase * 0.9) + 0.035 * bankMagSoft);
-        toe.scale.set(1 + 0.025 * toeReach, 1, 1 + 0.055 * toeReach);
+        toe.rotation.x = 0.05 + 0.15 * toeCurl - 0.1 * tuck + 0.04 * Math.sin(toePhase * 1.6);
+        toe.rotation.y = -sgn * offset * (0.1 + 0.24 * spread + 0.045 * Math.sin(toePhase))
+          + sgn * 0.04 * turnFoot;
+        toe.rotation.z = sgn * offset * (0.045 * Math.sin(toePhase * 0.9) + 0.06 * bankMagSoft)
+          + sgn * 0.04 * turnFoot;
+        toe.scale.set(1 + 0.045 * toeReach, 1, 1 + 0.09 * toeReach);
       }
     }
   }

@@ -10,7 +10,7 @@ import { scatterFlowers } from './flowers';
 import { scatterWeeds } from './weeds';
 import { scatterLeaves } from './leaves';
 import { scatterFauna, ChunkFauna } from './fauna';
-import { buildWater } from './water';
+import { buildStreamWater, buildWater } from './water';
 import { CHUNK_SIZE, CHUNK_RES, SPLATS_PER_CHUNK, SPLAT_DENSITY, WORLD_SEED, SUN_DIR } from '../config';
 
 // Normalised sun direction, for baking slope shading into the splats.
@@ -34,6 +34,7 @@ export class Chunk {
   private pointGeo: THREE.BufferGeometry;
   private rockGeo: THREE.BufferGeometry | null = null;
   private trunkGeo: THREE.BufferGeometry | null = null;
+  private streamWaterGeo: THREE.BufferGeometry | null = null;
   private waterGeo: THREE.BufferGeometry | null = null;
   private fauna: ChunkFauna | null = null;
 
@@ -163,12 +164,15 @@ export class Chunk {
       // The grass/water boundary is never a clean line. In the frayed margin band a
       // few turf dabs read instead as wet mud — the soggy, broken shoreline where
       // the brook laps the meadow — so the bank reads ragged, not a drawn outline.
-      const margin = path > 0.08 && path < 0.34; // the frayed transition band
-      const wetEdge = grassy && margin && rnd() < 0.35;
+      const margin = path > 0.06 && path < 0.42; // the frayed transition band
+      const wetEdge = grassy && margin && rnd() < 0.32;
+      const bankDirtStrength = THREE.MathUtils.smoothstep(path, 0.045, 0.22)
+        * (1 - THREE.MathUtils.smoothstep(path, 0.46, 0.66));
+      const bankDirt = rock < 0.55 && bankDirtStrength > 0 && rnd() < bankDirtStrength * 0.78;
       // The channel itself (strong path, not rock) reads as calm water surface.
-      const watery = !grassy && rock < 0.4;
+      const watery = path >= 0.42 && rock < 0.4;
 
-      if (grassy && !wetEdge) {
+      if (grassy && !wetEdge && !bankDirt) {
         if (rnd() < 0.022) {
           // a pale weathered stone / pebble nestled in the turf — stone variety
           // scattered across the meadow (cf. the reference), not just on rock faces.
@@ -234,39 +238,38 @@ export class Chunk {
           }
         }
       } else if (watery) {
-        // Calm water surface of the stream channel. mixColor now paints the channel
-        // in water tones (deep blue-green centre → pale shallows toward the banks);
-        // we keep these dabs STILL (wind = 0 → no sway/wave), low and flat-hugging
-        // the sunk bed, round and smooth — NO leafy blade treatment — so the brook
-        // reads as a calm, glassy ribbon rather than swaying vegetation. A faint
-        // sun-skimmed sheen lifts a few dabs so the surface isn't a flat slab.
+        // Underpaint below the real animated stream mesh. These dabs sit low in the
+        // carved bed as colour depth/sparkle; the moving water ribbon now carries
+        // the visible surface, so the river no longer reads as static painted grass.
         field.mixColor(x, z, y, slope, path, rock, cc);
         const sheen = THREE.MathUtils.clamp(0.86 + 0.22 * ndotl, 0.74, 1.12);
         cc.multiplyScalar(sheen);
-        // Sparkle dabs scattered on the calm surface: most water dabs stay their
-        // baked tone, but a scatter catch the SKY (pale-blue reflection glints) and a
-        // rarer few catch the SUN (warm white sparkle) — so the brook glitters with
-        // reflected light like a living surface rather than a flat painted ribbon.
         const g = rnd();
-        if (g < 0.16) cc.lerp(palette.skyHorizon, 0.35 + rnd() * 0.4); // sky-reflection glint
-        else if (g < 0.23) cc.lerp(palette.sun, 0.3 + rnd() * 0.3);    // warm sun sparkle
-        scale = 1.0 + rnd() * 0.9; // broad, flat surface dabs
-        yoff = 0.12 + rnd() * 0.28; // sits low on the water, in the sunk channel
-        wind = 0; // calm/still — water must not wave
+        if (g < 0.06) cc.lerp(palette.skyHorizon, 0.28 + rnd() * 0.32); // muted sky glint under the ribbon
+        else if (g < 0.09) cc.lerp(palette.sun, 0.22 + rnd() * 0.22);    // rare warm glint
+        scale = 0.45 + rnd() * 0.75;
+        yoff = 0.03 + rnd() * 0.09;
+        wind = 0;
         angle = rnd() * Math.PI;
         aspect = 0.9 + rnd() * 0.3; // round, never blade-ish
       } else {
-        // The wet shoreline (wetEdge): soggy dark mud where the brook meets the
-        // turf — and, off the channel, the rare bare rock dab. Either way STILL.
+        // The wet shoreline / cut bank: soggy dark mud where the brook meets the
+        // turf, exposed earth on steeper shoulders, and the rare bare rock dab.
+        // These sit low and still so a bank reads as ground, not waving grass.
         field.mixColor(x, z, y, slope, path, rock, cc);
         const shade = THREE.MathUtils.clamp(0.62 + 0.5 * ndotl, 0.5, 1.12);
-        if (rnd() < 0.12) cc.copy(palette.rock).lerp(palette.rockShadow, rnd());
-        else if (wetEdge) cc.copy(palette.waterEdge).lerp(palette.waterDeep, rnd() * 0.4); // wet-mud / damp shore fleck
+        if (bankDirt) {
+          cc.copy(palette.pathEarth)
+            .lerp(palette.pathEarthDry, 0.16 + rnd() * 0.16)
+            .lerp(palette.waterEdge, THREE.MathUtils.clamp(0.16 + path * 0.56, 0, 0.7))
+            .lerp(palette.rockShadow, 0.08 + rnd() * 0.22);
+        } else if (rnd() < 0.12) cc.copy(palette.rock).lerp(palette.rockShadow, rnd());
+        else if (wetEdge) cc.copy(palette.pathEarth).lerp(palette.waterEdge, 0.45 + rnd() * 0.25); // wet-mud / damp shore fleck
         cc.multiplyScalar(shade);
-        scale = wetEdge ? 0.6 + rnd() * 0.6 : 0.9 + rnd() * 0.8;
-        yoff = wetEdge ? 0.18 + rnd() * 0.3 : yoff; // shore mud hugs the ground
+        scale = bankDirt ? 0.55 + rnd() * 0.75 : wetEdge ? 0.6 + rnd() * 0.6 : 0.9 + rnd() * 0.8;
+        yoff = bankDirt || wetEdge ? 0.14 + rnd() * 0.26 : yoff; // shore mud hugs the ground
         wind = 0;
-        aspect = 0.95 + rnd() * 0.2;
+        aspect = bankDirt ? 0.8 + rnd() * 0.7 : 0.95 + rnd() * 0.2;
       }
 
       centers[w * 3] = x;
@@ -340,6 +343,15 @@ export class Chunk {
     const leaves = scatterLeaves(field, cx, cz);
     if (leaves) splatLayers.push(leaves);
 
+    // ---- stream water: animated flat-ish ribbon over the carved channel ----
+    const streamWaterGeo = buildStreamWater(field, cx, cz);
+    if (streamWaterGeo) {
+      this.streamWaterGeo = streamWaterGeo;
+      const stream = new THREE.Mesh(streamWaterGeo, waterMat);
+      stream.renderOrder = 1;
+      this.group.add(stream);
+    }
+
     // ---- water: a rare calm tarn in a low wet hollow (own rng stream) ----
     // Most chunks return null; only the few that hold a deep, wet basin get a pool.
     // The lit surface mesh drinks the sky; a ragged ring of wet-mud dabs joins the
@@ -387,6 +399,7 @@ export class Chunk {
     this.pointGeo.dispose(); // the merged terrain+foliage+flowers+weeds+shore field
     this.rockGeo?.dispose();
     this.trunkGeo?.dispose();
+    this.streamWaterGeo?.dispose();
     this.waterGeo?.dispose();
     this.fauna?.dispose();
   }

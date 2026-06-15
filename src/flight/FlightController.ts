@@ -12,6 +12,10 @@ import { TerrainField } from '../world/TerrainField';
 const UP = new THREE.Vector3(0, 1, 0);
 const MAX_ROLL = 0.62;
 const MAX_PITCH = 0.42;
+const MIN_CLEARANCE = 72;
+const SOFT_FLOOR_CLEARANCE = 112;
+const SOFT_CEILING_CLEARANCE = 240;
+const MAX_CLEARANCE = 300;
 
 export class FlightController {
   readonly position = new THREE.Vector3(0, 150, 30);
@@ -55,7 +59,27 @@ export class FlightController {
     // Continuous flight intent from whatever source is active (keyboard or phone gyro).
     const c = this.source.read();
     const targetRoll = -c.roll * MAX_ROLL; // bank INTO the turn (the tilt was inverted)
-    const targetPitch = c.pitch * MAX_PITCH;
+    let targetPitch = c.pitch * MAX_PITCH;
+
+    // Keep the bird in a comfortable flight band before it reaches a hard bound.
+    // The old ground check let it dive down to terrain+24 and then snapped upward,
+    // which read as a bounce. These guards bend the input away from the floor/sky
+    // early, while the hard clamp below is only a last-resort safety rail.
+    const currentGround = this.field.height(this.position.x, this.position.z);
+    const clearance = this.position.y - currentGround;
+    if (clearance < SOFT_FLOOR_CLEARANCE) {
+      const lift = 1 - THREE.MathUtils.clamp(
+        (clearance - MIN_CLEARANCE) / (SOFT_FLOOR_CLEARANCE - MIN_CLEARANCE),
+        0, 1,
+      );
+      targetPitch = Math.max(targetPitch, THREE.MathUtils.lerp(0.08, 0.24, lift));
+    } else if (clearance > SOFT_CEILING_CLEARANCE) {
+      const descend = THREE.MathUtils.clamp(
+        (clearance - SOFT_CEILING_CLEARANCE) / (MAX_CLEARANCE - SOFT_CEILING_CLEARANCE),
+        0, 1,
+      );
+      targetPitch = Math.min(targetPitch, THREE.MathUtils.lerp(-0.04, -0.18, descend));
+    }
 
     // Ease toward targets — this is where the "weight" lives.
     this.roll += (targetRoll - this.roll) * Math.min(1, dt * 2.1);
@@ -80,13 +104,20 @@ export class FlightController {
     const speed = Math.max(this.baseSpeed * 0.72, this.baseSpeed * (1 - this.pitch * trade));
     this.position.addScaledVector(this.forward, speed * dt);
 
-    // Never sink into the ground; ease the nose back up if we bottom out.
-    const floor = this.field.height(this.position.x, this.position.z) + 24;
+    // Hard rails: by the time these trigger, the soft guards above are already
+    // steering away. Keep them decisive so the bird can never visibly hit terrain
+    // or disappear into the high sky.
+    const ground = this.field.height(this.position.x, this.position.z);
+    const floor = ground + MIN_CLEARANCE;
     if (this.position.y < floor) {
       this.position.y = floor;
-      this.pitch += (0.12 - this.pitch) * Math.min(1, dt * 3);
+      this.pitch = Math.max(this.pitch, 0.08);
     }
-    if (this.position.y > 920) this.position.y = 920;
+    const ceiling = ground + MAX_CLEARANCE;
+    if (this.position.y > ceiling) {
+      this.position.y = ceiling;
+      this.pitch = Math.min(this.pitch, -0.06);
+    }
 
     this.clock += dt;
     this.updateCamera(dt);

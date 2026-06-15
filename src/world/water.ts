@@ -4,7 +4,7 @@ import {
   smoothstep, clamp, fract, floor, normalLocal,
 } from 'three/tsl';
 import { palette } from '../render/palette';
-import { CHUNK_SIZE, SUN_DIR } from '../config';
+import { CHUNK_RES, CHUNK_SIZE, SUN_DIR } from '../config';
 import { TerrainField } from './TerrainField';
 
 // Water — used SPARINGLY. A handful of small, calm tarns nestled in the rare low
@@ -290,6 +290,79 @@ export interface WaterResult {
 }
 
 /**
+ * Build the animated stream ribbon for one chunk. Unlike the terrain underpaint,
+ * this is a real water surface at TerrainField.streamLevel(): mostly flat across
+ * the brook and smoothed along its run, so it no longer rides over hills.
+ */
+export function buildStreamWater(field: TerrainField, cxChunk: number, czChunk: number): THREE.BufferGeometry | null {
+  const S = CHUNK_SIZE;
+  const RES = Math.max(16, Math.round(CHUNK_RES * 0.8));
+  const dim = RES + 1;
+  const ox = cxChunk * S;
+  const oz = czChunk * S;
+  const vcount = dim * dim;
+
+  const pos = new Float32Array(vcount * 3);
+  const col = new Float32Array(vcount * 3);
+  const shoreF = new Float32Array(vcount);
+  const tanF = new Float32Array(vcount);
+  const path = new Float32Array(vcount);
+  let maxPath = 0;
+
+  for (let j = 0; j < dim; j++) {
+    for (let i = 0; i < dim; i++) {
+      const idx = j * dim + i;
+      const x = ox + (i / RES) * S;
+      const z = oz + (j / RES) * S;
+      const p = field.pathMask(x, z);
+      path[idx] = p;
+      if (p > maxPath) maxPath = p;
+
+      pos[idx * 3] = x;
+      pos[idx * 3 + 1] = field.streamLevel(x, z) + 0.1;
+      pos[idx * 3 + 2] = z;
+
+      const centre = THREE.MathUtils.smoothstep(p, 0.44, 0.96);
+      const shore = 1 - THREE.MathUtils.smoothstep(p, 0.44, 0.84);
+      const sheen = waterHash(x * 0.018, z * 0.018);
+      _col.copy(palette.waterShallow).lerp(palette.waterDeep, centre * 0.82);
+      _col.lerp(palette.skyHorizon, (1 - centre) * 0.18 + sheen * 0.08);
+      col[idx * 3] = _col.r;
+      col[idx * 3 + 1] = _col.g;
+      col[idx * 3 + 2] = _col.b;
+
+      shoreF[idx] = shore;
+      tanF[idx] = fract01(x * 0.0065 + z * 0.004);
+    }
+  }
+  if (maxPath < 0.42) return null;
+
+  const indices: number[] = [];
+  for (let j = 0; j < RES; j++) {
+    for (let i = 0; i < RES; i++) {
+      const a = j * dim + i;
+      const b = a + 1;
+      const d = a + dim;
+      const e = d + 1;
+      const avg = (path[a] + path[b] + path[d] + path[e]) * 0.25;
+      if (avg < 0.42) continue;
+      indices.push(a, d, b, b, d, e);
+    }
+  }
+  if (indices.length === 0) return null;
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  g.setAttribute('aShore', new THREE.BufferAttribute(shoreF, 1));
+  g.setAttribute('aTangent', new THREE.BufferAttribute(tanF, 1));
+  g.setIndex(indices);
+  g.computeVertexNormals();
+  g.computeBoundingSphere();
+  return g;
+}
+
+/**
  * Build the single calm pool for one chunk, or null if the chunk holds no
  * sufficiently deep wet basin. `rnd` is the chunk's own (salted) stream so pool
  * placement can never shift the splat / tree / rock layouts.
@@ -503,4 +576,12 @@ export function buildWater(
   };
 
   return { surfaceGeo, shore, level, radius: maxR, cx: bestX, cz: bestZ };
+}
+
+function fract01(v: number): number {
+  return v - Math.floor(v);
+}
+
+function waterHash(x: number, y: number): number {
+  return fract01(Math.sin(x * 127.1 + y * 311.7) * 43758.5453);
 }

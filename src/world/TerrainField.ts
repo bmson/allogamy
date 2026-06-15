@@ -82,18 +82,58 @@ export class TerrainField {
     return continent * 105 + (ridge - 0.5) * 64 + hills * 24 + detail * 3.5;
   }
 
+  private streamLevelFrom(x: number, z: number, reliefY: number, wet: number): number {
+    const r = 54;
+    const r2 = 96;
+    const hL = this.relief(x - r, z), hR = this.relief(x + r, z);
+    const hD = this.relief(x, z - r), hU = this.relief(x, z + r);
+    const hLD = this.relief(x - r * 0.7, z - r * 0.7), hRU = this.relief(x + r * 0.7, z + r * 0.7);
+    const hLU = this.relief(x - r * 0.7, z + r * 0.7), hRD = this.relief(x + r * 0.7, z - r * 0.7);
+    const broad = (reliefY * 1.6 + hL + hR + hD + hU + (hLD + hRU + hLU + hRD) * 0.45) / 8.2;
+    const localLow = Math.min(
+      reliefY, hL, hR, hD, hU,
+      this.relief(x - r2, z), this.relief(x + r2, z),
+      this.relief(x, z - r2), this.relief(x, z + r2),
+    );
+    // A low, smoothed grade line cuts through local bumps instead of following
+    // every hill vertex. The tiny downstream tilt keeps the water from reading as
+    // a string of unrelated puddles while staying calm at chunk scale.
+    const downstreamGrade = this.hN.fbm(x * 0.00045 + 301, z * 0.00045 - 211, 2) * 2.8 - z * 0.0032;
+    const shelf = broad * 0.7 + localLow * 0.3;
+    const basinY = reliefY - wet * wet * 16;
+    return Math.min(basinY + 0.52, shelf + 1.35 - wet * wet * 2.4 + downstreamGrade);
+  }
+
+  /** Flat-ish water level used by the stream surface mesh and the carved bed. */
+  streamLevel(x: number, z: number): number {
+    const reliefY = this.relief(x, z);
+    const wet = this.wetness(x, z);
+    return this.streamLevelFrom(x, z, reliefY, wet);
+  }
+
   /** Terrain height at world (x, z) — relief, then the local water/path carving. */
   height(x: number, z: number): number {
-    let y = this.relief(x, z);
+    const reliefY = this.relief(x, z);
+    let y = reliefY;
     // Scoop the wet basins lower so pools nestle in genuine hollows (and the land
     // reads with more relief). The dip is squared so it only bites where wetness is
     // strong — a few cupped low places, not a general lowering.
     const wet = this.wetness(x, z);
     y -= wet * wet * 16;
-    // Carve paths a touch lower so they read as worn tracks (now a sunk water bed):
-    // a soft V — deepest down the centreline, easing back up toward the banks.
+    // Carve the stream as an actual bed below a smoothed water level, rather than
+    // just tinting the terrain. This lets the brook cut through ridges and sit flat
+    // inside the channel instead of climbing over every hill in the heightfield.
     const p = this.pathMask(x, z);
-    y -= p * p * 2.0;
+    if (p > 0.01) {
+      const level = this.streamLevelFrom(x, z, reliefY, wet);
+      const bed = level - 0.12 - p * 0.22;
+      const bank = level + Math.pow(1 - p, 1.35) * 1.45 + 0.04 - p * 0.05;
+      const bedBlend = smoothstep(p, 0.18, 0.48);
+      const target = bank * (1 - bedBlend) + bed * bedBlend;
+      const carve = Math.max(0, y - target);
+      y -= carve * smoothstep(p, 0.0, 0.42);
+      y -= p * p * 0.1;
+    }
     return y;
   }
 
@@ -119,7 +159,7 @@ export class TerrainField {
 
     // Half-width breathes between ~0 (track fades to nothing) and full worn track.
     const widthN = this.wN.fbm(x * 0.0016 + 5, z * 0.0016 + 5, 2); // ~[-1,1]
-    const half = clamp(0.062 + widthN * 0.05, 0.0, 0.11);
+    const half = clamp(0.12 + widthN * 0.075, 0.0, 0.24);
     if (half <= 0.001) return 0; // a stretch where the path has worn away entirely
 
     // Frayed edge: nibble the contour distance with fine noise so the rim breaks up
@@ -169,6 +209,11 @@ export class TerrainField {
     // The water channel washes its bed clean — suppress stone inside the brook so a
     // scree patch never floats over the calm surface as a rocky speckle.
     if (path > 0.3) rock *= 1 - smoothstep(path, 0.3, 0.6);
+    // Freshly cut stream banks should read as exposed earth/stone rather than a
+    // vertical carpet of turf. This shoulder fades before the channel centre so the
+    // animated water stays clean.
+    const cutBankRock = smoothstep(path, 0.08, 0.26) * (1 - smoothstep(path, 0.42, 0.62));
+    rock = clamp(Math.max(rock, cutBankRock * 0.32), 0, 1);
     return { slope, path, rock, nx, nz };
   }
 
@@ -199,9 +244,16 @@ export class TerrainField {
     // Gentle noise mottles the surface so it isn't a flat slab — but it's a slow,
     // smooth ripple (low frequency), never the scuffed/gritty break-up of earth.
     if (path > 0.01) {
+      const bank = smoothstep(path, 0.025, 0.22) * (1 - smoothstep(path, 0.44, 0.72));
+      if (bank > 0) {
+        _bank.copy(palette.pathEarth).lerp(palette.pathEarthDry, 0.18)
+          .lerp(palette.waterEdge, 0.18 + path * 0.48)
+          .lerp(palette.rockShadow, clamp((path - 0.2) * 1.35, 0, 0.36));
+        out.lerp(_bank, bank * 0.88);
+      }
       // Wet-mud rim first: a thin dark band rides the frayed outer edge of the
       // channel (path mid, not full) where wet earth meets grass.
-      const rim = (1 - Math.abs(path - 0.42) * 3.4);
+      const rim = (1 - Math.abs(path - 0.44) * 3.4);
       if (rim > 0) out.lerp(palette.waterEdge, clamp(rim, 0, 1) * 0.75);
       // The channel body: shallows toward the banks deepening to the centre. A slow
       // ripple shifts the deep/shallow mix so the surface has gentle movement of
@@ -221,7 +273,7 @@ export class TerrainField {
       if (spark > 0.72) _water.lerp(palette.sun, (spark - 0.72) * 1.6 * 0.5);
       // Only the channel proper paints as water — faint/worn stretches keep their
       // green so the brook reads as a thin winding ribbon the meadow presses up to.
-      out.lerp(_water, smoothstep(path, 0.3, 0.9));
+      out.lerp(_water, smoothstep(path, 0.4, 0.9));
     }
 
     // Rock.
@@ -240,3 +292,4 @@ export class TerrainField {
 
 const _water = new THREE.Color();
 const _rk = new THREE.Color();
+const _bank = new THREE.Color();
