@@ -84,7 +84,7 @@ const REST_WRIST = -0.1;
 // positive folds it DOWN. Tunable — dial these from a screenshot.
 const REST_NECK_X = [0, 0, 0, 0];
 
-const SCALE = 3.0;
+const SCALE = 2.72;
 
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 

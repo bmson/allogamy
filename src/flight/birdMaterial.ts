@@ -70,9 +70,9 @@ const PAPER = new THREE.Color('#f6f4ee');     // warm off-white drawing paper (l
 // silhouette. Lifted to a brighter, less saturated dove-grey so the shaded side is a
 // soft wash, not a heavy slate. MIDWASH lifted to match so the light→mid→shadow
 // ladder stays bright and the bird never sinks toward the ink.
-const SHADOW = new THREE.Color('#b7c0cc');    // cool dove-grey ink-wash (shadow fill, lifted)
-const MIDWASH = new THREE.Color('#d8dce0');   // optional mid fill between light & shadow (lifted)
-const INK = new THREE.Color('#23232b');       // near-black contour / hatch ink
+const SHADOW = new THREE.Color('#bfccc6');    // cool green-grey ink-wash from meadow bounce
+const MIDWASH = new THREE.Color('#dde4dd');   // optional mid fill between light & shadow
+const INK = new THREE.Color('#48515d');       // soft slate contour / hatch ink
 const KEY_WARM = new THREE.Color('#fff0cf');  // scene's warm golden key (warms the lit fill)
 
 /**
@@ -101,20 +101,20 @@ export interface BirdShadeOpts {
 }
 
 const DEFAULTS: Required<Omit<BirdShadeOpts, 'emissiveTint'>> = {
-  flatten: 0.92,        // STRONGLY flat: the shading snaps to hard fills, not a ramp
+  flatten: 0.76,        // painterly flat fills with a little live light softness
   bands: 3,             // light / mid / shadow — three flat ink-wash regions
   wrap: 0.55,           // soft underlying half-Lambert before it's posterised
-  shadeLift: 0.5,       // lift the shadow fill further toward the mid — a luminous pale
+  shadeLift: 0.62,      // lift the shadow fill further toward the mid — a luminous pale
                         //   bird whose shaded side stays an open, airy wash (was too dark)
-  noiseScale: 5.5,      // object-space wash frequency (a few mottled patches per body)
-  noiseStrength: 0.5,   // a confident watercolour/dry-ink mottle on every fill
-  edgeWobble: 0.32,     // the terminator wavers like a hand-painted shadow edge
-  outline: 1.05,        // a bold hand-inked contour — the form's 2D boundary
-  outlineWobble: 0.4,   // the edge breathes; never a clean vector rim
-  hatch: 0.3,           // a light pencil tooth in the shadow only (secondary, not primary)
-  hatchScale: 7.5,
-  paperWarmth: 0.4,     // lit fill warms toward the golden key — the only "light" tint
-  tintIdentity: 0.62,   // identity HUE only — applied to a value-flattened albedo
+  noiseScale: 4.8,      // object-space wash frequency (a few mottled patches per body)
+  noiseStrength: 0.28,  // quiet watercolour mottle so the form does not clump
+  edgeWobble: 0.18,     // the terminator wavers, but does not fracture the silhouette
+  outline: 0.42,        // soft ink edge; the scene should absorb the bird, not frame it
+  outlineWobble: 0.24,  // the edge breathes; never a clean vector rim
+  hatch: 0.08,          // a whisper of pencil tooth in the shadow only
+  hatchScale: 8.5,
+  paperWarmth: 0.34,    // lit fill warms toward the golden key — the only "light" tint
+  tintIdentity: 0.54,   // identity HUE only — applied to a value-flattened albedo
   mergeMask: false,     // off for parts without the aMerge attribute (e.g. legs)
 };
 

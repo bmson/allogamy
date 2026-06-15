@@ -51,14 +51,14 @@ export const BONE = {
 // Palette — a soft pearl-grey pelican warming to ochre at the bill, cooling to
 // slate beneath. Tuned to sit quietly in the misty meadow.
 // ---------------------------------------------------------------------------
-export const C_BODY_TOP = new THREE.Color('#eef1f3'); // sunlit pearl back
-export const C_BODY = new THREE.Color('#dbe0e5'); // body grey
-export const C_BODY_LOW = new THREE.Color('#a7b0bb'); // cool slate underside / soft AO
-export const C_NECK = new THREE.Color('#e9ecee'); // pale nape
-export const C_COVERT = new THREE.Color('#c2c9d1'); // inner wing
-export const C_COVERT_LOW = new THREE.Color('#97a0ac'); // wing underside
-export const C_PRIMARY = new THREE.Color('#2b2f38'); // charcoal flight feathers
-export const C_PRIMARY_EDGE = new THREE.Color('#4a5364'); // cool slate sheen on tips
+export const C_BODY_TOP = new THREE.Color('#f2f0e6'); // warm pearl back
+export const C_BODY = new THREE.Color('#dde4dc'); // meadow-lit body grey
+export const C_BODY_LOW = new THREE.Color('#a8b9b0'); // cool green bounce / soft AO
+export const C_NECK = new THREE.Color('#edf0e8'); // pale nape
+export const C_COVERT = new THREE.Color('#c8d5cb'); // inner wing
+export const C_COVERT_LOW = new THREE.Color('#9db1aa'); // wing underside
+export const C_PRIMARY = new THREE.Color('#465665'); // softened slate flight feathers
+export const C_PRIMARY_EDGE = new THREE.Color('#6b7d8c'); // cool blue-grey sheen on tips
 export const C_BILL = new THREE.Color('#e8b04a'); // warm ochre bill
 export const C_BILL_TIP = new THREE.Color('#d98b39');
 export const C_BILL_RIDGE = new THREE.Color('#caa24a');
@@ -1256,7 +1256,7 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
     const tspan = clamp01((Math.abs(x) - Math.abs(WING_ATTACH.x)) / WING_TIP);
     const top01 = (y - bb.min.y) / Math.max(1e-3, bb.max.y - bb.min.y);
     const trail01 = (bb.max.z - z) / Math.max(1e-3, bb.max.z - bb.min.z); // 0 LE → 1 TE
-    const primary = smoothstep(0.4, 0.95, Math.max(tspan, trail01 * 0.6));
+    const primary = smoothstep(0.5, 1.0, Math.max(tspan, trail01 * 0.48));
     const base = C_COVERT.clone().lerp(C_PRIMARY, primary);
     c.copy(C_COVERT_LOW).lerp(base, smoothstep(0.25, 0.7, top01));
     // at the buried root the wing shares the body's colour, so the fairing reads as
@@ -1291,8 +1291,8 @@ export function buildWingSkin(side: number): THREE.BufferGeometry {
     const primShaft = Math.pow(primRaw, 0.7);                    // crisp the shaft
     const primGap = Math.pow(1 - primRaw, 0.7);                  // crisp the gap
     if (primary > 0.2) {
-      c.lerp(C_FEATHER_SHADE.clone().multiplyScalar(0.7), primGap * primary * 0.45); // dark gaps between fingers
-      c.lerp(C_PRIMARY_EDGE, primShaft * smoothstep(0.5, 1.0, tspan) * 0.4); // shaft sheen
+      c.lerp(C_FEATHER_SHADE.clone().multiplyScalar(0.82), primGap * primary * 0.32); // soft gaps between fingers
+      c.lerp(C_PRIMARY_EDGE, primShaft * smoothstep(0.5, 1.0, tspan) * 0.32); // shaft sheen
     }
 
     // pale feather lip along the very trailing edge (catches the sun)

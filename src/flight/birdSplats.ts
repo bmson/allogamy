@@ -40,21 +40,14 @@ import {
 // units, pre-SCALE). DAB_SCALE is the dab half-size in those same local units. A
 // light coat: enough overlap to soften edges + shimmer, sparse enough that the solid
 // pelican reads clearly through it.
-// SCALE/DENSITY are tuned together so the coat reads as the SAME painterly surface as
-// the meadow — BIG soft gaussian dabs that overlap and MELT into a continuous painted
-// skin — rather than a mat of tiny tight marks (which read as "wool"/fleece). The
-// meadow's carpet is large, soft, overlapping splats; the bird coat now mirrors that
-// at bird scale: each dab is ~2× larger, laid at ~⅓ the density (so total coverage and
-// cost stay similar), and feathered wider so neighbouring dabs fuse instead of pilling.
-const DENSITY = 340;        // dabs per unit² — sparser, because each dab now covers much
-//                             more area; overlap still high enough to blend into a surface.
-const DAB_SCALE = 0.31;     // dab world half-size — BIG soft gaussians (was 0.155). Larger,
-//                             broader marks sit like the meadow's brushwork instead of
-//                             reading as tiny curls / a woolly fleece.
-const DAB_ASPECT = 1.7;     // elongate each dab into an oval STROKE (like the meadow splats), not a circle
-const DAB_SIZE_JITTER = 0.4; // ± fraction of per-dab size variation (broader range → organic)
-const COAT_OPACITY = 0.82;  // soft CORE with a wide feathered RIM that blends, so dense big
-//                             dabs fuse into one painted skin (not see-through, not pilled).
+// SCALE/DENSITY are tuned together so the coat reads as a soft glaze over the solid
+// bird, not a chunky shell. The dabs are still the meadow's language, but quieter and
+// more translucent so the pelican keeps a clean gliding silhouette.
+const DENSITY = 180;        // dabs per unit² — enough broken colour, not a woolly mass.
+const DAB_SCALE = 0.155;    // local half-size; root scale turns these into visible strokes.
+const DAB_ASPECT = 1.85;    // elongate each dab into an oval STROKE (like the meadow splats), not a circle
+const DAB_SIZE_JITTER = 0.28; // ± fraction of per-dab size variation
+const COAT_OPACITY = 0.34;  // translucent glaze; the solid silhouette stays in charge.
 const SHIMMER = 0.14;       // faint animated dab wobble amplitude (NOT wind sway)
 const SEED = 0x9e3779b9;
 
@@ -185,8 +178,8 @@ function sampleGeometry(
       // of the sampled hue — some darker, some lighter — so the coat reads as hand-laid
       // paint marks (varied tones) rather than transparent specks. A small warm↔cool
       // temperature tilt on top keeps it from looking like a flat greyscale value ramp.
-      const warm = (rng() * 2 - 1) * 0.035;
-      const shade = 0.88 + rng() * 0.2; // per-dab value 0.88..1.08 → varied shades, but COHESIVE (not speckled)
+      const warm = (rng() * 2 - 1) * 0.02;
+      const shade = 0.94 + rng() * 0.12; // cohesive value jitter; avoids speckled clumps
       const cl2 = (v: number) => Math.min(1, Math.max(0, v));
       cl.colors.push(
         cl2(cr * shade + warm),
@@ -220,14 +213,12 @@ const QUAD = {
 function makeCoatMaterial(): THREE.MeshBasicNodeMaterial {
   const mat = new THREE.MeshBasicNodeMaterial();
   mat.fog = false;
-  // Like the meadow splats: near-opaque CORES that write depth (so the coat self-occludes
-  // and isn't see-through), with soft FEATHERED RIMS that blend — so dense overlapping
-  // marks melt into one continuous painted skin instead of reading as separate patches or
-  // foam. alphaTest discards the empty outer rim so the cores still lay down clean depth.
+  // Like the meadow splats, but quieter: translucent CORES with soft FEATHERED RIMS
+  // that blend over the solid bird instead of building up into separate patches or foam.
   mat.transparent = true;
-  mat.depthWrite = true;
+  mat.depthWrite = false;
   mat.depthTest = true;
-  mat.alphaTest = 0.22; // low cut → a WIDE soft feathered rim survives, so big neighbouring
+  mat.alphaTest = 0.08; // low cut → a WIDE soft feathered rim survives, so neighbouring
   //                       dabs melt into one continuous painted skin (less defined = less wool)
 
   const aCenter = attribute('aCenter', 'vec3');
