@@ -12,8 +12,8 @@ import { TerrainField } from '../world/TerrainField';
 const UP = new THREE.Vector3(0, 1, 0);
 const MAX_ROLL = 0.62;
 const MAX_PITCH = 0.42;
-const MIN_CLEARANCE = 42;
-const SOFT_FLOOR_CLEARANCE = 74;
+const MIN_CLEARANCE = 34;
+const SOFT_FLOOR_CLEARANCE = 62;
 const SOFT_CEILING_CLEARANCE = 220;
 const MAX_CLEARANCE = 285;
 
@@ -72,7 +72,7 @@ export class FlightController {
         (clearance - MIN_CLEARANCE) / (SOFT_FLOOR_CLEARANCE - MIN_CLEARANCE),
         0, 1,
       );
-      targetPitch = Math.max(targetPitch, THREE.MathUtils.lerp(0.04, 0.18, lift));
+      targetPitch = Math.max(targetPitch, THREE.MathUtils.lerp(0.03, 0.15, lift));
     } else if (clearance > SOFT_CEILING_CLEARANCE) {
       const descend = THREE.MathUtils.clamp(
         (clearance - SOFT_CEILING_CLEARANCE) / (MAX_CLEARANCE - SOFT_CEILING_CLEARANCE),
@@ -111,7 +111,7 @@ export class FlightController {
     const floor = ground + MIN_CLEARANCE;
     if (this.position.y < floor) {
       this.position.y = floor;
-      this.pitch = Math.max(this.pitch, 0.05);
+      this.pitch = Math.max(this.pitch, 0.04);
     }
     const ceiling = ground + MAX_CLEARANCE;
     if (this.position.y > ceiling) {
