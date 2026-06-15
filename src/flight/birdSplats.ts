@@ -40,16 +40,22 @@ import {
 // units, pre-SCALE). DAB_SCALE is the dab half-size in those same local units. A
 // light coat: enough overlap to soften edges + shimmer, sparse enough that the solid
 // pelican reads clearly through it.
-const DENSITY = 1050;       // dabs per unit² — dense enough that the soft-feathered marks
-//                             BLEND into a continuous painted surface (like the meadow),
-//                             not sparse opaque patches.
-const DAB_SCALE = 0.155;    // dab world half-size — kept small so dabs sit as brush marks
-//                             ON the form and don't puff off the silhouette into fuzz.
-const DAB_ASPECT = 2.0;     // elongate each dab into an oval STROKE (like the meadow splats), not a circle
-const DAB_SIZE_JITTER = 0.35; // ± fraction of per-dab size variation
-const COAT_OPACITY = 0.9;   // near-opaque CORE with a soft feathered RIM that blends, so the
-//                             surface reads as one painted skin (not see-through, not foam).
-const SHIMMER = 0.16;       // faint animated dab wobble amplitude (NOT wind sway)
+// SCALE/DENSITY are tuned together so the coat reads as the SAME painterly surface as
+// the meadow — BIG soft gaussian dabs that overlap and MELT into a continuous painted
+// skin — rather than a mat of tiny tight marks (which read as "wool"/fleece). The
+// meadow's carpet is large, soft, overlapping splats; the bird coat now mirrors that
+// at bird scale: each dab is ~2× larger, laid at ~⅓ the density (so total coverage and
+// cost stay similar), and feathered wider so neighbouring dabs fuse instead of pilling.
+const DENSITY = 340;        // dabs per unit² — sparser, because each dab now covers much
+//                             more area; overlap still high enough to blend into a surface.
+const DAB_SCALE = 0.31;     // dab world half-size — BIG soft gaussians (was 0.155). Larger,
+//                             broader marks sit like the meadow's brushwork instead of
+//                             reading as tiny curls / a woolly fleece.
+const DAB_ASPECT = 1.7;     // elongate each dab into an oval STROKE (like the meadow splats), not a circle
+const DAB_SIZE_JITTER = 0.4; // ± fraction of per-dab size variation (broader range → organic)
+const COAT_OPACITY = 0.82;  // soft CORE with a wide feathered RIM that blends, so dense big
+//                             dabs fuse into one painted skin (not see-through, not pilled).
+const SHIMMER = 0.14;       // faint animated dab wobble amplitude (NOT wind sway)
 const SEED = 0x9e3779b9;
 
 // deterministic PRNG so the coat is identical every load (no flicker between runs)
@@ -83,9 +89,11 @@ function sampleGeometry(
   bindMatrix: THREE.Matrix4,
   clusters: Map<number, Cluster>,
   rng: () => number,
+  scaleMul: number,
 ): void {
   const pos = geo.attributes.position.array as ArrayLike<number>;
   const col = (geo.attributes.color?.array ?? null) as ArrayLike<number> | null;
+  const nor = (geo.attributes.normal?.array ?? null) as ArrayLike<number> | null;
   const si = geo.attributes.skinIndex.array as ArrayLike<number>;
   const sw = geo.attributes.skinWeight.array as ArrayLike<number>;
   const index = geo.index;
@@ -121,7 +129,7 @@ function sampleGeometry(
       // BILL FADE: `p` is still in bird-local space (nose +Z; the bill runs z≈1.2→2.1).
       // The pelican's signature bill must read SMOOTH, not foamed — so we fade the coat
       // out across the forehead (z~1.05) and place NO dabs on the bill proper (z>1.22).
-      const localZ = p.z;
+      const localX = p.x, localY = p.y, localZ = p.z;
       if (localZ > 1.22) continue; // bare smooth bill
       let billShrink = 1;
       if (localZ > 1.05) {
@@ -144,14 +152,35 @@ function sampleGeometry(
       let cl = clusters.get(bone);
       if (!cl) { cl = newCluster(); clusters.set(bone, cl); }
       cl.centers.push(p.x, p.y, p.z);
-      // size: small, jittered per dab; shrunk further across the bill-fade transition
-      // so the few dabs near the bill base taper away rather than ending in a hard line.
-      cl.scales.push(DAB_SCALE * (0.55 + 0.45 * billShrink) * (1 + (rng() * 2 - 1) * DAB_SIZE_JITTER));
+      // REGION-AWARE SIZE. The big soft dabs read beautifully on the broad body mass,
+      // but on the slim neck/head and the thin wing membranes they overshoot the form
+      // and blob the silhouette. Taper the dab size toward the head (z past the neck
+      // root ~0.7) so the face/crown stays crisp, and apply the per-source `scaleMul`
+      // (wings pass <1) so the membranes carry finer strokes whose trailing edges stay
+      // sharp. Combined with the existing bill-fade shrink.
+      let regionShrink = 1;
+      if (localZ > 0.7) regionShrink = Math.max(0.6, 1 - (localZ - 0.7) * 0.55);
+      cl.scales.push(
+        DAB_SCALE * scaleMul * regionShrink
+        * (0.55 + 0.45 * billShrink)
+        * (1 + (rng() * 2 - 1) * DAB_SIZE_JITTER),
+      );
       // colour: sampled vertex colour (already palette-mixed) + tiny per-dab jitter so
       // the coat shimmers in temperature like the meadow's broken colour, never flat.
-      const cr = col ? col[corner * 3] : 0.85;
-      const cg = col ? col[corner * 3 + 1] : 0.86;
-      const cb = col ? col[corner * 3 + 2] : 0.88;
+      let cr = col ? col[corner * 3] : 0.85;
+      let cg = col ? col[corner * 3 + 1] : 0.86;
+      let cb = col ? col[corner * 3 + 2] : 0.88;
+      // ENVIRONMENTAL COLOUR BLEED — the single biggest "sits-in-the-scene" cue for an
+      // up-close subject in plein-air light. A real pale bird is not lit by a neutral
+      // studio: its UPPER surfaces catch warm sky/sun, its UNDERSIDES catch a cool green
+      // bounce off the meadow below. Read the vertex normal's up/down facing and tint the
+      // dab toward a warm key (top) or a soft meadow-green (underside) — subtly, so the
+      // plumage keeps its pearl identity but is unmistakably lit BY this landscape.
+      const ny = nor ? nor[corner * 3 + 1] : 0;
+      const up = Math.max(0, ny), down = Math.max(0, -ny);
+      const ut = up * 0.07, dt = down * 0.1; // warm-sky / cool-meadow bleed strengths
+      cr = cr * (1 - ut) + 1.0 * ut; cg = cg * (1 - ut) + 0.95 * ut; cb = cb * (1 - ut) + 0.82 * ut;
+      cr = cr * (1 - dt) + 0.55 * dt; cg = cg * (1 - dt) + 0.66 * dt; cb = cb * (1 - dt) + 0.43 * dt;
       // OPAQUE broken-colour dabs: each dab is a SOLID flat patch in a different SHADE
       // of the sampled hue — some darker, some lighter — so the coat reads as hand-laid
       // paint marks (varied tones) rather than transparent specks. A small warm↔cool
@@ -164,7 +193,14 @@ function sampleGeometry(
         cl2(cg * shade),
         cl2(cb * shade - warm),
       );
-      cl.angles.push(rng() * Math.PI * 2);
+      // STROKE ORIENTATION — a COHERENT flow, not per-dab random. Random angles made
+      // the oval strokes cross every which way → a matted felt. Instead derive each
+      // dab's angle from a smooth low-frequency field of its body-local position, so
+      // neighbouring dabs point the SAME way and the elongated marks read as plumage
+      // COMBED along the form (like the meadow's grass blades laid in a direction),
+      // plus a modest jitter so it stays hand-laid rather than mechanically aligned.
+      const flow = localZ * 1.7 + localY * 0.6 + Math.sin(localX * 2.3) * 0.5;
+      cl.angles.push(flow + (rng() * 2 - 1) * 0.6);
     }
   }
 }
@@ -191,7 +227,8 @@ function makeCoatMaterial(): THREE.MeshBasicNodeMaterial {
   mat.transparent = true;
   mat.depthWrite = true;
   mat.depthTest = true;
-  mat.alphaTest = 0.34; // discard the faint outer rim → soft feathered overlap, cores blend
+  mat.alphaTest = 0.22; // low cut → a WIDE soft feathered rim survives, so big neighbouring
+  //                       dabs melt into one continuous painted skin (less defined = less wool)
 
   const aCenter = attribute('aCenter', 'vec3');
   const aScale = attribute('aScale', 'float');
@@ -222,14 +259,18 @@ function makeCoatMaterial(): THREE.MeshBasicNodeMaterial {
     sin(r.y.mul(6.0).floor().mul(127.1).add(seed.mul(91.0).floor().mul(311.7))).mul(43758.5453),
   );
   const d = r.dot(r).mul(float(1.0).add(bristle.sub(0.5).mul(0.2)));
-  // Soft feathered gaussian (meadow-matched): opaque core melting to a wide blended rim,
-  // so dense marks fuse into a painted surface. alphaTest culls the empty rim (d≳1).
-  mat.opacityNode = smoothstep(float(1.0), float(0.45), d).mul(COAT_OPACITY);
+  // Soft feathered gaussian (meadow-matched): soft core melting to a WIDE blended rim,
+  // so dense big marks fuse into a painted surface. The feather is widened (smoothstep
+  // 1.0→0.25, was →0.45) so the falloff is gentle and overlapping dabs dissolve into one
+  // another instead of stacking as separate pills. alphaTest culls the empty rim (d≳1).
+  mat.opacityNode = smoothstep(float(1.0), float(0.25), d).mul(COAT_OPACITY);
 
-  // loaded-brush tooth (rides the colour, fades to the rim) — same as the meadow.
+  // loaded-brush tooth (rides the colour, fades to the rim) — same as the meadow, but
+  // EASED (0.055, was 0.085): the strong bristle streak is what made the small dabs read
+  // as fibrous wool, so on the big soft dabs we keep only a whisper of tooth.
   const streak = sin(r.x.mul(9.0).add(seed.mul(6.2831)));
   const body = float(1.0).sub(d).max(0.0);
-  const tooth = streak.mul(0.6).add(bristle.sub(0.5)).mul(0.085).mul(body);
+  const tooth = streak.mul(0.6).add(bristle.sub(0.5)).mul(0.055).mul(body);
   mat.colorNode = aColor.mul(float(1.0).add(tooth));
 
   return mat;
@@ -257,6 +298,8 @@ export interface CoatSource {
   boneInverses: THREE.Matrix4[]; // skeleton.boneInverses (bind-world → bone-local)
   bindMatrix: THREE.Matrix4;     // the skinned mesh's bind matrix (geom → bind-world)
   bones: THREE.Bone[];           // skeleton.bones, indexed by skinIndex
+  scaleMul?: number;             // per-source dab-size multiplier (wings pass <1 so their
+  //                                thin membranes carry finer strokes; default 1 for the body)
 }
 
 /**
@@ -274,7 +317,7 @@ export function buildBirdSplatCoat(sources: CoatSource[]): THREE.Mesh[] {
   for (const src of sources) {
     // gather this source's dabs grouped by bone
     const clusters = new Map<number, Cluster>();
-    sampleGeometry(src.geo, src.boneInverses, src.bindMatrix, clusters, rng);
+    sampleGeometry(src.geo, src.boneInverses, src.bindMatrix, clusters, rng, src.scaleMul ?? 1);
     for (const [boneIdx, cl] of clusters) {
       if (cl.scales.length === 0) continue;
       const bone = src.bones[boneIdx];

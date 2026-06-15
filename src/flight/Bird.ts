@@ -324,9 +324,11 @@ export class Bird implements Updatable {
     mesh.add(shoulder);
     this.bob.add(mesh);
     mesh.bind(skeleton);
-    // expose this wing skin as a coat-sampling source
+    // expose this wing skin as a coat-sampling source. Finer dabs than the body
+    // (scaleMul < 1) so the thin wing membrane's trailing edge stays crisp.
     this.coatSources.push({
       geo, boneInverses: skeleton.boneInverses, bindMatrix: mesh.bindMatrix, bones: skeleton.bones,
+      scaleMul: 0.82,
     });
 
     return { shoulder, elbow, wrist, hand, sgn: side, springPos: 0, springVel: 0 };
