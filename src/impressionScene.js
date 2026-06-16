@@ -967,7 +967,8 @@ const perfStats = {
   lastTileMs: 0,
   lastRebuildMs: 0,
   lastSortMs: 0,
-  sortInterval: 0
+  sortInterval: 0,
+  trailPower: 0
 };
 window.__allogamyStats = perfStats;
 
@@ -1018,7 +1019,7 @@ wakeLeafPoints.frustumCulled = false;
 wakeLeafPoints.renderOrder = 3;
 scene.add(wakeLeafPoints);
 
-const WAKE_POLLEN_COUNT = 120;
+const WAKE_POLLEN_COUNT = 180;
 const wakePollenPos = new Float32Array(WAKE_POLLEN_COUNT * 3);
 const wakePollenCol = new Float32Array(WAKE_POLLEN_COUNT * 3);
 const wakePollenSize = new Float32Array(WAKE_POLLEN_COUNT);
@@ -1031,6 +1032,7 @@ const wakePollenState = [];
 const wakePollenRnd = mulberry32(0x90f10a11);
 const wakePollenColor = new THREE.Color();
 let wakePollenCursor = 0;
+let birdTrailAccumulator = 0;
 
 for (let i = 0; i < WAKE_POLLEN_COUNT; i++) {
   wakePollenState.push({
@@ -1135,6 +1137,73 @@ function spawnWakePollen(source, power) {
   wakePollenAspect[i] = 0.62 + wakePollenRnd() * 0.32;
   wakePollenPhase[i] = wakePollenRnd();
   wakePollenFlex[i] = 0.12 + wakePollenRnd() * 0.38;
+}
+
+function spawnBirdTrailFleck(power, groundPower) {
+  const i = wakePollenCursor++ % WAKE_POLLEN_COUNT;
+  const s = wakePollenState[i];
+  const side = wakePollenRnd() < 0.5 ? -1 : 1;
+  const lateralX = -flight.flatForward.z;
+  const lateralZ = flight.flatForward.x;
+  const back = 1.8 + wakePollenRnd() * (4.0 + groundPower * 4.4);
+  const wing = side * (0.28 + wakePollenRnd() * (1.55 + power * 1.25));
+  const px = flight.x - flight.flatForward.x * back + lateralX * wing;
+  const pz = flight.z - flight.flatForward.z * back + lateralZ * wing;
+  const ground = heightAt(px, pz);
+  const hover = Math.max(ground + 0.55, flight.y - 0.45 + (wakePollenRnd() - 0.5) * (0.55 + groundPower * 0.8));
+  const drift = 0.5 + power * 1.25;
+
+  s.x = px;
+  s.y = hover;
+  s.z = pz;
+  s.vx = -flight.flatForward.x * (0.55 + wakePollenRnd() * 1.1 + power * 1.35)
+    + lateralX * side * (0.25 + wakePollenRnd() * 1.2) * drift
+    + uniforms.uWindDir.value.x * (0.55 + wakePollenRnd() * 0.8);
+  s.vy = -0.04 + wakePollenRnd() * 0.34 + groundPower * (0.28 + wakePollenRnd() * 0.38);
+  s.vz = -flight.flatForward.z * (0.55 + wakePollenRnd() * 1.1 + power * 1.35)
+    + lateralZ * side * (0.25 + wakePollenRnd() * 1.2) * drift
+    + uniforms.uWindDir.value.y * (0.55 + wakePollenRnd() * 0.8);
+  s.age = 0;
+  s.maxLife = 0.95 + wakePollenRnd() * 0.82 + groundPower * 0.85;
+  s.life = s.maxLife;
+  s.baseSize = 0.08 + wakePollenRnd() * 0.16 + power * 0.11;
+  s.spin = (wakePollenRnd() < 0.5 ? -1 : 1) * (2.5 + wakePollenRnd() * 5.2 + power * 2.0);
+
+  const mood = wakePollenRnd();
+  if (mood < 0.48) wakePollenColor.setHSL(0.135 + wakePollenRnd() * 0.035, 0.72, 0.66 + wakePollenRnd() * 0.12);
+  else if (mood < 0.72) wakePollenColor.setHSL(0.07 + wakePollenRnd() * 0.04, 0.62, 0.6 + wakePollenRnd() * 0.12);
+  else if (mood < 0.9) wakePollenColor.setHSL(0.56 + wakePollenRnd() * 0.06, 0.48, 0.68 + wakePollenRnd() * 0.12);
+  else wakePollenColor.setHSL(0.985 + wakePollenRnd() * 0.025, 0.56, 0.56 + wakePollenRnd() * 0.1);
+  wakePollenColor.lerp(new THREE.Color(0.88, 0.84, 0.64), 0.18);
+
+  const k = i * 3;
+  wakePollenCol[k] = wakePollenColor.r;
+  wakePollenCol[k + 1] = wakePollenColor.g;
+  wakePollenCol[k + 2] = wakePollenColor.b;
+  wakePollenAngle[i] = wakePollenRnd() * Math.PI;
+  wakePollenAspect[i] = 0.45 + wakePollenRnd() * 0.36;
+  wakePollenPhase[i] = wakePollenRnd();
+  wakePollenFlex[i] = 0.08 + wakePollenRnd() * 0.32;
+}
+
+function emitBirdTrail(dt, clearance, groundPower) {
+  if (reducedMotion) {
+    birdTrailAccumulator = 0;
+    return;
+  }
+  const turnEnergy = Math.min(1, Math.abs(flight.roll) / MAX_ROLL);
+  const climbEnergy = Math.min(1, Math.abs(flight.pitch) / MAX_PITCH);
+  const trailPower = THREE.MathUtils.clamp(0.18 + groundPower * 0.82 + turnEnergy * 0.16 + climbEnergy * 0.08, 0, 1);
+  const rate = 6.5 + groundPower * 22 + turnEnergy * 4.5;
+  birdTrailAccumulator += dt * rate;
+  perfStats.trailPower = trailPower;
+  let emitted = 0;
+  while (birdTrailAccumulator >= 1 && emitted < 4) {
+    spawnBirdTrailFleck(trailPower, groundPower);
+    birdTrailAccumulator -= 1;
+    emitted++;
+  }
+  if (clearance > 82) birdTrailAccumulator = Math.min(birdTrailAccumulator, 0.35);
 }
 
 function updateWakeLeaves(dt, wakePower) {
@@ -1251,6 +1320,7 @@ function updateLandscapeWake(dt) {
   uniforms.uBirdXZ.value.set(flight.x, flight.z);
   uniforms.uBirdDir.value.set(flight.flatForward.x, flight.flatForward.z).normalize();
   uniforms.uBirdWake.value = landscapeWake;
+  emitBirdTrail(dt, clearance, lowPass);
 
   wakeLeafProbeTimer -= dt;
   if (!reducedMotion && landscapeWake > 0.18 && wakeLeafProbeTimer <= 0 && activeLeafSources.length) {
