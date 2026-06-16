@@ -80,13 +80,14 @@ function makeNoise(seed) {
 const TILE = 58;                 // world units per tile
 const GRID_R = 2;                 // tiles kept each side of camera -> (2R+1)^2 active
 const ACTIVE = 2 * GRID_R + 1;    // 5x5 = 25 live tiles
-const FADE_OUT = GRID_R * TILE - 14;   // strokes fully gone by here (280)
-const FADE_IN  = FADE_OUT - 44;       // start dissolving here (150)
-const PER_TILE_CAP = 30000;       // hard ceiling on splats per tile
+const FADE_OUT = GRID_R * TILE - 14;   // strokes fully gone by here
+const FADE_IN  = FADE_OUT - 44;       // start dissolving here
+const SORT_CULL_RADIUS = FADE_OUT + 2; // only sort/upload strokes that can still contribute after edge fade
+const PER_TILE_CAP = 20000;       // hard ceiling on splats per tile
 const CAP = ACTIVE * ACTIVE * PER_TILE_CAP;  // total GPU buffer capacity
 
 let WORLD_SEED = 20260612;
-let DENSITY = 1.0;                // user-tunable stroke density
+let DENSITY = 0.86;               // user-tunable stroke density
 let N = makeNoise(WORLD_SEED);    // ONE global noise -> seamless terrain & biomes
 
 const T_GROUND = 0, T_FOLIAGE = 1, T_GRASS = 3, T_LEAF = 4, T_FLY = 5, T_BIRD = 6, T_SMOKE = 7;
@@ -200,7 +201,7 @@ function buildTile(tx, tz) {
   }
 
   // -------- 2) broken-color texture strokes --------
-  for (let i = cnt(20000); i > 0 && !full(); i--) {
+  for (let i = cnt(14000); i > 0 && !full(); i--) {
     const x = ox + rng() * TILE, z = oz + rng() * TILE;
     const h = heightAt(x, z);
     const nrm = normalAt(x, z);
@@ -212,7 +213,7 @@ function buildTile(tx, tz) {
   }
 
   // -------- 3) grass --------
-  for (let i = cnt(40000); i > 0 && !full(); i--) {
+  for (let i = cnt(28000); i > 0 && !full(); i--) {
     const x = ox + rng() * TILE, z = oz + rng() * TILE;
     const h = heightAt(x, z);
     if (h > 32) continue;
@@ -230,7 +231,7 @@ function buildTile(tx, tz) {
   }
 
   // -------- 4) poppies + other wildflowers --------
-  for (let i = cnt(13000); i > 0 && !full(); i--) {
+  for (let i = cnt(8000); i > 0 && !full(); i--) {
     const x = ox + rng() * TILE, z = oz + rng() * TILE;
     const h = heightAt(x, z);
     if (h > 24) continue;
@@ -245,7 +246,7 @@ function buildTile(tx, tz) {
       push(x, h + 0.42, z, c.clone(), 0.1, 0, 0.9, T_GRASS, 0.3);
     }
   }
-  for (let i = cnt(4000); i > 0 && !full(); i--) {
+  for (let i = cnt(2600); i > 0 && !full(); i--) {
     const x = ox + rng() * TILE, z = oz + rng() * TILE;
     const h = heightAt(x, z);
     if (h > 22) continue;
@@ -259,7 +260,7 @@ function buildTile(tx, tz) {
   }
 
   // -------- 5) path detail --------
-  for (let i = cnt(4500); i > 0 && !full(); i--) {
+  for (let i = cnt(2800); i > 0 && !full(); i--) {
     const x = ox + rng() * TILE, z = oz + rng() * TILE;
     const m = pathMask(x, z);
     if (m < 0.25) continue;
@@ -275,7 +276,7 @@ function buildTile(tx, tz) {
   }
 
   // -------- 6) boulders --------
-  for (let r = cnt(40); r > 0 && !full(); r--) {
+  for (let r = cnt(26); r > 0 && !full(); r--) {
     const x = ox + rng() * TILE, z = oz + rng() * TILE;
     const h = heightAt(x, z);
     if (h < 2) continue;
@@ -382,7 +383,7 @@ function buildTile(tx, tz) {
   let trees = 0;
   const leafSpots = [];
   const wakeLeafSources = [];
-  const treeTarget = cnt(220), treeAttempts = cnt(2200);
+  const treeTarget = cnt(150), treeAttempts = cnt(1500);
   for (let attempt = 0; attempt < treeAttempts && trees < treeTarget && !full(); attempt++) {
     const x = ox + rng() * TILE, z = oz + rng() * TILE;
     const h = heightAt(x, z);
@@ -457,7 +458,7 @@ function buildTile(tx, tz) {
   }
 
   // a few loose ferns + falling leaves to soften the meadow
-  for (let i = cnt(680); i > 0 && !full(); i--) {
+  for (let i = cnt(420); i > 0 && !full(); i--) {
     const x = ox + rng() * TILE, z = oz + rng() * TILE;
     if (groveField(x, z) < 0.12) continue;
     const h = heightAt(x, z);
@@ -474,7 +475,7 @@ function buildTile(tx, tz) {
   }
 
   // -------- 8) shrubs --------
-  for (let i = cnt(128); i > 0 && !full(); i--) {
+  for (let i = cnt(92); i > 0 && !full(); i--) {
     const x = ox + rng() * TILE, z = oz + rng() * TILE;
     const h = heightAt(x, z);
     if (h > 26) continue;
@@ -862,8 +863,13 @@ const paintFrag = `
 `;
 
 // ---------------- renderer / pipeline ----------------
-const renderer = new THREE.WebGLRenderer({ antialias: false });
-const DPR = Math.min(devicePixelRatio, 1.5);
+const renderer = new THREE.WebGLRenderer({
+  antialias: false,
+  alpha: false,
+  stencil: false,
+  powerPreference: 'high-performance'
+});
+const DPR = Math.min(devicePixelRatio, 1.0);
 renderer.setPixelRatio(DPR);
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
@@ -933,7 +939,7 @@ const rPos = new Float32Array(CAP * 3), rCol = new Float32Array(CAP * 3);
 const rSize = new Float32Array(CAP), rAngle = new Float32Array(CAP);
 const rAspect = new Float32Array(CAP), rType = new Float32Array(CAP);
 const rPhase = new Float32Array(CAP), rFlex = new Float32Array(CAP);
-const order = new Uint32Array(CAP), keys = new Float32Array(CAP);
+const order = new Uint32Array(CAP), sourceOrder = new Uint32Array(CAP), keys = new Float32Array(CAP);
 
 const geometry = new THREE.BufferGeometry();
 const dyn = (arr, n) => new THREE.BufferAttribute(arr, n).setUsage(THREE.DynamicDrawUsage);
@@ -952,9 +958,21 @@ geometry.setDrawRange(0, 0);
 scene.add(points);
 
 let count = 0;
+const perfStats = {
+  strokes: 0,
+  visible: 0,
+  tiles: 0,
+  queued: 0,
+  avgFrameMs: 16.7,
+  lastTileMs: 0,
+  lastRebuildMs: 0,
+  lastSortMs: 0,
+  sortInterval: 0
+};
+window.__allogamyStats = perfStats;
 
 // ---------------- heron wake: light leaf pool shed from nearby foliage ----------------
-const WAKE_LEAF_COUNT = 180;
+const WAKE_LEAF_COUNT = 120;
 const wakeLeafPos = new Float32Array(WAKE_LEAF_COUNT * 3);
 const wakeLeafCol = new Float32Array(WAKE_LEAF_COUNT * 3);
 const wakeLeafSize = new Float32Array(WAKE_LEAF_COUNT);
@@ -1000,7 +1018,7 @@ wakeLeafPoints.frustumCulled = false;
 wakeLeafPoints.renderOrder = 3;
 scene.add(wakeLeafPoints);
 
-const WAKE_POLLEN_COUNT = 220;
+const WAKE_POLLEN_COUNT = 120;
 const wakePollenPos = new Float32Array(WAKE_POLLEN_COUNT * 3);
 const wakePollenCol = new Float32Array(WAKE_POLLEN_COUNT * 3);
 const wakePollenSize = new Float32Array(WAKE_POLLEN_COUNT);
@@ -1510,22 +1528,39 @@ function buildPlayerBird() {
 }
 buildPlayerBird();
 
+function initPlayerBirdStaticAttributes() {
+  for (let i = 0; i < PLAYER_BIRD_COUNT; i++) {
+    const d = birdLocal[i];
+    const k = i * 3;
+    birdCol[k] = d.color.r;
+    birdCol[k + 1] = d.color.g;
+    birdCol[k + 2] = d.color.b;
+    birdSize[i] = d.size * PLAYER_BIRD_SIZE_SCALE;
+    birdAspect[i] = d.aspect;
+    birdType[i] = T_GROUND;
+    birdPhase[i] = d.phase;
+    birdFlex[i] = 0;
+  }
+}
+initPlayerBirdStaticAttributes();
+
+const fixed = (arr, n) => new THREE.BufferAttribute(arr, n);
 const birdGeo = new THREE.BufferGeometry();
 birdGeo.setAttribute('position', dyn(birdPos, 3));
-birdGeo.setAttribute('splatColor', dyn(birdCol, 3));
-birdGeo.setAttribute('splatSize', dyn(birdSize, 1));
+birdGeo.setAttribute('splatColor', fixed(birdCol, 3));
+birdGeo.setAttribute('splatSize', fixed(birdSize, 1));
 birdGeo.setAttribute('splatAngle', dyn(birdAngle, 1));
-birdGeo.setAttribute('splatAspect', dyn(birdAspect, 1));
-birdGeo.setAttribute('splatType', dyn(birdType, 1));
-birdGeo.setAttribute('splatPhase', dyn(birdPhase, 1));
-birdGeo.setAttribute('splatFlex', dyn(birdFlex, 1));
+birdGeo.setAttribute('splatAspect', fixed(birdAspect, 1));
+birdGeo.setAttribute('splatType', fixed(birdType, 1));
+birdGeo.setAttribute('splatPhase', fixed(birdPhase, 1));
+birdGeo.setAttribute('splatFlex', fixed(birdFlex, 1));
 birdGeo.setDrawRange(0, PLAYER_BIRD_COUNT);
 const playerBird = new THREE.Points(birdGeo, splatMat);
 playerBird.frustumCulled = false;
 playerBird.renderOrder = 2;
 scene.add(playerBird);
 
-function updatePlayerBird(t) {
+function updatePlayerBird(t, dt) {
   const motion = THREE.MathUtils.clamp(flight.airSpeed / Math.max(BASE_SPEED + flight.speedTrim, 1), 0, 1);
   const fwd = flight.forward;
   const right = flight.right;
@@ -1537,9 +1572,18 @@ function updatePlayerBird(t) {
   const climbCue = THREE.MathUtils.smoothstep(pitchCue, 0.06, 0.82);
   const glideCue = THREE.MathUtils.smoothstep(-pitchCue, 0.04, 0.78);
   const bankCue = THREE.MathUtils.clamp(flight.swing, -1, 1);
-  const flapRate = 1.3 + motion * 0.72 + climbCue * 1.18 - glideCue * 0.55;
-  const flapAmp = THREE.MathUtils.clamp(0.27 + motion * 0.62 + climbCue * 0.48 - glideCue * 0.52, 0.12, 1.18);
-  const flap = Math.sin(t * flapRate) * flapAmp;
+
+  const cadenceTarget = THREE.MathUtils.clamp(0.18 + motion * 0.06 + climbCue * 0.13 - glideCue * 0.1, 0.08, 0.38);
+  const powerTarget = THREE.MathUtils.clamp(0.22 + motion * 0.23 + climbCue * 0.2 - glideCue * 0.32, 0.06, 0.58);
+  const flexTarget = THREE.MathUtils.clamp(0.42 + motion * 0.16 + climbCue * 0.22 - glideCue * 0.12, 0.24, 0.78);
+  flight.wingCadence += (cadenceTarget - flight.wingCadence) * (1 - Math.exp(-dt * 2.2));
+  flight.wingPower += (powerTarget - flight.wingPower) * (1 - Math.exp(-dt * 2.8));
+  flight.wingFlex += (flexTarget - flight.wingFlex) * (1 - Math.exp(-dt * 2.6));
+  flight.wingPhase = (flight.wingPhase + dt * flight.wingCadence * Math.PI * 2) % (Math.PI * 2);
+
+  const flapWave = Math.sin(flight.wingPhase);
+  const flap = flapWave * flight.wingPower;
+  const strokeFlex = (0.55 + Math.abs(flapWave) * 0.45) * flight.wingFlex * (1 - glideCue * 0.35);
   const settle = Math.sin(t * (0.78 + motion * 0.22) + 0.6) * 0.08 * (0.35 + motion * 0.65) * (1 - glideCue * 0.7);
   const headYaw = THREE.MathUtils.clamp(-flight.roll * 0.45 + Math.sin(t * 1.25) * 0.045, -0.38, 0.38);
   const headPitch = THREE.MathUtils.clamp(-flight.pitch * 0.42 + Math.sin(t * 1.55 + 0.7) * 0.035, -0.22, 0.22);
@@ -1561,15 +1605,18 @@ function updatePlayerBird(t) {
       const bankSide = d.wingSide * bankCue;
       const insideTurn = Math.max(0, -bankSide);
       const outsideTurn = Math.max(0, bankSide);
-      const lift = (0.18 + span * 0.74 + climbCue * (0.08 + span * 0.24)) * flap + settle;
+      const lift = (0.16 + span * 0.64 + climbCue * (0.05 + span * 0.14)) * flap + settle;
       const glideLift = (0.07 + span * 0.16) * glideCue;
       const bankLift = bankSide * (0.08 + span * 0.28) * (0.45 + motion * 0.55);
-      y += (lift + glideLift + bankLift - insideTurn * span * 0.08) * d.flex;
-      z -= Math.abs(flap) * span * (0.1 + climbCue * 0.08) * (0.35 + motion * 0.65) * (1 - glideCue * 0.62);
+      const tipFlex = Math.pow(span, 1.35) * d.flex * strokeFlex;
+      const flapBend = flap * tipFlex * (0.24 + climbCue * 0.12);
+      y += (lift + glideLift + bankLift - insideTurn * span * 0.08) * (d.flex + tipFlex * 0.32) + flapBend;
+      z -= Math.abs(flap) * span * (0.08 + climbCue * 0.05) * (0.35 + motion * 0.65) * (1 - glideCue * 0.62);
+      z += flap * tipFlex * 0.16;
       z -= span * glideCue * 0.08;
       z += insideTurn * span * 0.11 - outsideTurn * span * 0.04;
       x += d.wingSide * span * (glideCue * 0.13 + outsideTurn * 0.08 - insideTurn * 0.14);
-      x += d.wingSide * Math.sin(t * flapRate + d.phase * 0.7) * span * 0.08 * (0.35 + motion * 0.65) * (1 - glideCue * 0.55);
+      x += d.wingSide * Math.sin(flight.wingPhase + d.phase * 0.7) * span * 0.055 * (0.35 + motion * 0.65) * (1 - glideCue * 0.55);
     } else if (d.part === BIRD_PART_HEAD) {
       let hx = x - headBaseX;
       let hy = y - headBaseY;
@@ -1606,17 +1653,9 @@ function updatePlayerBird(t) {
     birdPos[k] = cx + right.x * x + up.x * y + fwd.x * z;
     birdPos[k + 1] = cy + right.y * x + up.y * y + fwd.y * z;
     birdPos[k + 2] = cz + right.z * x + up.z * y + fwd.z * z;
-    birdCol[k] = d.color.r;
-    birdCol[k + 1] = d.color.g;
-    birdCol[k + 2] = d.color.b;
-    birdSize[i] = d.size * PLAYER_BIRD_SIZE_SCALE;
     birdAngle[i] = d.angle + (d.wingSide ? d.wingSide * (flap * 0.14 + bankCue * (0.06 + span * 0.08) + glideCue * 0.035) : 0);
-    birdAspect[i] = d.aspect;
-    birdType[i] = T_GROUND;
-    birdPhase[i] = d.phase;
-    birdFlex[i] = 0;
   }
-  for (const name of ['position', 'splatColor', 'splatSize', 'splatAngle', 'splatAspect', 'splatType', 'splatPhase', 'splatFlex']) {
+  for (const name of ['position', 'splatAngle']) {
     const a = birdGeo.attributes[name];
     a.clearUpdateRanges();
     a.addUpdateRange(0, PLAYER_BIRD_COUNT * a.itemSize);
@@ -1660,12 +1699,16 @@ function processQueue() {
     const k = genQueue.shift();
     if (loaded.has(k)) continue;
     const [tx, tz] = k.split(',').map(Number);
+    const buildStart = performance.now();
     loaded.set(k, buildTile(tx, tz));
+    perfStats.lastTileMs = performance.now() - buildStart;
     made++; rebuildDirty = true;
   }
+  perfStats.queued = genQueue.length;
 }
 
 function rebuild() {
+  const rebuildStart = performance.now();
   let o3 = 0, o1 = 0;
   activeLeafSources.length = 0;
   for (const t of loaded.values()) {
@@ -1679,6 +1722,9 @@ function rebuild() {
   }
   count = o1;
   forceSort = true;
+  perfStats.strokes = count + PLAYER_BIRD_COUNT + WAKE_LEAF_COUNT + WAKE_POLLEN_COUNT;
+  perfStats.tiles = loaded.size;
+  perfStats.lastRebuildMs = performance.now() - rebuildStart;
   const stat = document.getElementById('stat');
   if (stat) {
     stat.textContent = `${(count + PLAYER_BIRD_COUNT).toLocaleString()} strokes · ${loaded.size} tiles`;
@@ -1686,33 +1732,49 @@ function rebuild() {
 }
 
 // ---------------- O(n) counting sort over the live set ----------------
-const BUCKETS = 1024;
+const BUCKETS = 512;
+const SORT_INTERVAL_ACTIVE = 6;
+const SORT_INTERVAL_CALM = 10;
 const counts = new Uint32Array(BUCKETS);
 const starts = new Uint32Array(BUCKETS);
 const viewDir = new THREE.Vector3();
 
 function sortSplats() {
   if (count === 0) { geometry.setDrawRange(0, 0); return; }
+  const sortStart = performance.now();
   camera.getWorldDirection(viewDir);
   const vx = viewDir.x, vy = viewDir.y, vz = viewDir.z;
+  const cx = uniforms.uCamXZ.value.x, cz = uniforms.uCamXZ.value.y;
+  const cullSq = SORT_CULL_RADIUS * SORT_CULL_RADIUS;
   let min = Infinity, max = -Infinity;
+  let visible = 0;
   for (let i = 0; i < count; i++) {
     const j = i * 3;
+    const dx = M.pos[j] - cx, dz = M.pos[j + 2] - cz;
+    if (dx * dx + dz * dz > cullSq) continue;
     const k = M.pos[j] * vx + M.pos[j + 1] * vy + M.pos[j + 2] * vz;
-    keys[i] = k;
+    keys[visible] = k;
+    sourceOrder[visible] = i;
+    visible++;
     if (k < min) min = k;
     if (k > max) max = k;
   }
+  if (visible === 0) {
+    geometry.setDrawRange(0, 0);
+    perfStats.visible = 0;
+    perfStats.lastSortMs = performance.now() - sortStart;
+    return;
+  }
   const inv = (BUCKETS - 1) / Math.max(max - min, 1e-6);
   counts.fill(0);
-  for (let i = 0; i < count; i++) counts[((keys[i] - min) * inv) | 0]++;
+  for (let i = 0; i < visible; i++) counts[((keys[i] - min) * inv) | 0]++;
   let acc = 0;
   for (let b = BUCKETS - 1; b >= 0; b--) { starts[b] = acc; acc += counts[b]; }
-  for (let i = 0; i < count; i++) {
+  for (let i = 0; i < visible; i++) {
     const b = ((keys[i] - min) * inv) | 0;
-    order[starts[b]++] = i;
+    order[starts[b]++] = sourceOrder[i];
   }
-  for (let i = 0; i < count; i++) {
+  for (let i = 0; i < visible; i++) {
     const s = order[i], d3 = i * 3, s3 = s * 3;
     rPos[d3] = M.pos[s3]; rPos[d3 + 1] = M.pos[s3 + 1]; rPos[d3 + 2] = M.pos[s3 + 2];
     rCol[d3] = M.col[s3]; rCol[d3 + 1] = M.col[s3 + 1]; rCol[d3 + 2] = M.col[s3 + 2];
@@ -1722,10 +1784,12 @@ function sortSplats() {
   for (const name of ['position', 'splatColor', 'splatSize', 'splatAngle', 'splatAspect', 'splatType', 'splatPhase', 'splatFlex']) {
     const a = geometry.attributes[name];
     a.clearUpdateRanges();
-    a.addUpdateRange(0, count * a.itemSize);
+    a.addUpdateRange(0, visible * a.itemSize);
     a.needsUpdate = true;
   }
-  geometry.setDrawRange(0, count);
+  geometry.setDrawRange(0, visible);
+  perfStats.visible = visible + PLAYER_BIRD_COUNT + WAKE_LEAF_COUNT + WAKE_POLLEN_COUNT;
+  perfStats.lastSortMs = performance.now() - sortStart;
 }
 
 // ---------------- bird flight + chase camera ----------------
@@ -1759,6 +1823,10 @@ const flight = {
   speedCue: 0,
   fovOffset: 0,
   clock: 0,
+  wingPhase: 0,
+  wingCadence: 0.22,
+  wingPower: 0.34,
+  wingFlex: 0.5,
   airSpeed: BASE_SPEED,
   speedTrim: 0,
   camYawOffset: 0,
@@ -2027,13 +2095,15 @@ onResize();
 // ---------------- main loop ----------------
 let last = performance.now(), frame = 0;
 function loop(now) {
-  const dt = Math.min((now - last) / 1000, 0.05);
+  const frameMs = now - last;
+  const dt = Math.min(frameMs / 1000, 0.05);
   last = now;
+  perfStats.avgFrameMs += (frameMs - perfStats.avgFrameMs) * 0.04;
   if (!reducedMotion) uniforms.uTime.value += dt;
 
   updateFlight(dt, now);
   updateLandscapeWake(dt);
-  updatePlayerBird(now * 0.001);
+  updatePlayerBird(now * 0.001, dt);
 
   // keep the tile grid centred on the bird
   const ctx = Math.floor(flight.x / TILE), ctz = Math.floor(flight.z / TILE);
@@ -2041,7 +2111,12 @@ function loop(now) {
   processQueue();
   if (rebuildDirty) { rebuild(); rebuildDirty = false; }
 
-  if (forceSort || frame % 4 === 0) { sortSplats(); forceSort = false; }
+  const sortInterval = Math.max(Math.abs(flight.swing), Math.abs(flight.speedCue)) > 0.25
+    ? SORT_INTERVAL_ACTIVE
+    : SORT_INTERVAL_CALM;
+  perfStats.sortInterval = sortInterval;
+  if (forceSort || frame % sortInterval === 0) { sortSplats(); forceSort = false; }
+  if (frame % 60 === 0) renderer.domElement.dataset.perf = JSON.stringify(perfStats);
   frame++;
 
   renderer.setRenderTarget(rtScene);
