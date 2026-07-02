@@ -6,3 +6,6 @@ dist
 
 # Claude Code session + agent worktrees
 .claude/
+
+# local session logs
+session-log.jsonl
