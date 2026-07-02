@@ -1,54 +1,64 @@
 # allogamy
 
-An art-installation flight over a living, splat-painted landscape. You are a
-large, deliberate bird gliding across endless lush hills rendered in a
-Gaussian-splat / point-cloud style — bold saturated greens, a wide cyan sky,
-wildflowers, and wind. Cross-pollination is the theme: later you'll spread
-flora across the world by breathing onto it.
+A therapeutic flight piece. You are a **red-crowned crane** gliding over an
+endless landscape painted in a Monet-leaning **watercolor** style — luminous
+washes, violet shadows, paper grain, poppy drifts, calm tarns with water
+lilies. There is nothing to win.
 
-**Art direction:** *Ghibli Verdant* — see `style.png` reference. Bright clean
-midday light, painterly clustered splats, rounded canopies, theatrical wind.
-
-## Tech
-
-- **Three.js + WebGPURenderer** (WebGPU only), TypeScript, Vite.
-- Terrain = a **solid colour-matched mesh** (you can never see through the
-  ground) under a **dense point-splat layer** + wildflower speckle.
-- **Seamless infinite streaming**: chunks are generated on the fly, nearest
-  first, well beyond the fog wall, so terrain never visibly changes on screen.
-- **Weighty banking flight**: tilt to turn, climb/dive trades for speed, all
-  eased so the bird feels heavy and gliding.
+**Allogamy is the theme and the loop:** skim low and your wake stirs golden
+pollen off the meadow. Where a grain settles, something grows — wildflowers,
+grass tufts, ferns, flowering shrubs, little saplings, lilies when it lands
+on water. Circle back and the strip you flew is in bloom.
 
 ## Run
 
 ```bash
 pnpm install
-pnpm dev      # http://localhost:5173  (also exposed on your LAN for the phone)
+pnpm dev      # http://localhost:5173
 ```
 
-Requires a WebGPU-capable browser (Chrome recommended) for the best path.
+Runs on plain WebGL (no WebGPU required).
 
 ## Controls
 
-- **← / →** — tilt & bank into a turn
-- **↑ / ↓** — climb & dive
+- **↑ / ↓ or W / S** — climb & dive (diving low is how you pollinate)
+- **← / → or A / D** — bank into a turn
+- **scroll** — trim cruise speed
+- **drag** — ease the camera around
 
-## Roadmap
+## How it's built
 
-- **M1 ✅** Splat terrain, streaming, sky, weighty flight.
-- **M2** Procedural tree generator (trunks + detailed non-repetitive canopies),
-  bushes with flowers & berries, plush wind-driven grass, GPU wind field.
-- **M3** Hyper-real pelican-derived bird mesh with spring-driven weighty flap.
-- **M4** iPhone gyroscope control + sound-based WebRTC pairing (ggwave chirp) +
-  blow-to-spread-pollen.
-
-## Layout
+The live game is `src/impressionScene.js` plus the modules in `src/scene/`.
+Everything on screen — terrain, trees, water, the crane, pollen, blooms — is
+one kind of primitive: a rotated elliptical **watercolor dab** rendered as a
+point sprite, depth-sorted and blended, then finished by a single post pass
+(wet-edge cohesion, halation, pigment edge-darkening, paper grain, a deckled
+border).
 
 ```
 src/
-  core/      engine loop, input, rng, noise
-  render/    palette, sky, procedural textures
-  world/     terrain field, chunk builder, streaming manager
-  flight/    flight controller + chase camera
-  config.ts  world tunables
+  impressionScene.js    orchestrator: renderer, streaming, wake, flight, camera
+  scene/
+    config.js           world + GPU-layout constants, Monet light
+    terrain.js          endless seeded height/biome field (ponds below y=4)
+    tileBuilder.js      paints one tile of strokes into its buffer slot
+    crane.js            the crane's dabs + wingbeat/glide/head animation
+    blooms.js           pollen that settled -> growing plants
+    shaders.js          splat / sky / watercolor post GLSL
 ```
+
+### Performance notes
+
+- One shared interleaved layout for every splat buffer (`f32` pos+size+angle,
+  `u8` color+params): ~27 bytes/stroke instead of 48, two GPU uploads instead
+  of eight.
+- Tiles are built **directly into a persistent slot** of the big buffers from
+  a cached per-tile height grid (~1.5k noise samples instead of ~2.5M), so
+  streaming in a tile neither hitches nor recopies the world.
+- The painter's-order sort is an O(n) counting sort over only strokes that
+  can matter (radius + behind-camera culled), run every 6–10 frames.
+- Live stats: `window.__allogamyStats` (strokes, visible, sort/tile ms,
+  blooms…).
+
+The `src/core|world|flight|render` TypeScript tree is an older WebGPU
+experiment that is not wired into `index.html`; the game does not use it.

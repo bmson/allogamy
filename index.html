@@ -6,29 +6,38 @@
 <title>allogamy</title>
 <style>
   html, body {
-    margin: 0; height: 100%; overflow: hidden; background: #c9cfdd;
+    margin: 0; height: 100%; overflow: hidden; background: #ece7d9; /* warm paper */
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   }
   canvas { display: block; }
   .hud {
     position: fixed; top: 18px; left: 18px; z-index: 10;
-    color: rgba(65, 55, 82, 0.86); user-select: none; pointer-events: none;
-    text-shadow: 0 1px 8px rgba(255,250,240,0.76);
+    color: rgba(84, 70, 56, 0.88); user-select: none; pointer-events: none;
+    text-shadow: 0 1px 8px rgba(255, 250, 240, 0.78);
   }
   .hud h1 {
     margin: 0 0 4px;
     font-family: ui-serif, Georgia, "Times New Roman", serif;
     font-size: 21px; font-weight: 500; letter-spacing: 0.12em;
-    text-transform: lowercase;
+    text-transform: lowercase; font-style: italic;
   }
   .hud p { margin: 0; font-size: 10px; letter-spacing: 0.035em; opacity: 0.62; }
+  #blooms {
+    position: fixed; bottom: 16px; right: 20px; z-index: 10;
+    margin: 0; font-family: ui-serif, Georgia, serif; font-style: italic;
+    font-size: 13px; letter-spacing: 0.08em;
+    color: rgba(84, 70, 56, 0.72); user-select: none; pointer-events: none;
+    text-shadow: 0 1px 8px rgba(255, 250, 240, 0.78);
+  }
 </style>
 </head>
 <body>
 <div class="hud">
   <h1>allogamy</h1>
-  <p>WASD / arrows to fly · drag camera</p>
+  <p>WASD / arrows to fly &middot; scroll trims speed &middot; drag to look</p>
+  <p>skim the meadow &mdash; where your pollen settles, flowers grow</p>
 </div>
+<p id="blooms"></p>
 
 <script type="module" src="/src/impressionScene.js"></script>
 </body>
